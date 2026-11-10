@@ -3,10 +3,15 @@ cordee.exemple.fr {
 	reverse_proxy 127.0.0.1:8800 {
 		# On remplace l'en-tête au lieu de le compléter : un client ne peut pas se faire passer pour une autre adresse.
 		header_up X-Real-IP {remote_host}
-		# Serveur derrière Cloudflare (ports 80/443 ouverts aux seules plages Cloudflare) :
-		# {remote_host} serait l'adresse de Cloudflare, pas du visiteur. Utiliser alors la ligne
-		# ci-dessous à la place, fiable seulement si le pare-feu refuse tout ce qui ne vient pas de Cloudflare.
-		# header_up X-Real-IP {http.request.header.CF-Connecting-IP}
+		# Serveur derrière Cloudflare : {remote_host} serait l'adresse de Cloudflare, pas du visiteur.
+		# Déclarer alors dans le bloc global du Caddyfile :
+		#   servers {
+		#     trusted_proxies static <plages IP de Cloudflare : cloudflare.com/ips>
+		#     trusted_proxies_strict
+		#     client_ip_headers CF-Connecting-IP
+		#   }
+		# et remplacer {remote_host} par {client_ip} ci-dessus. CF-Connecting-IP n'est cru que pour
+		# les requêtes venues de Cloudflare : personne d'autre ne peut se faire passer pour une autre adresse.
 
 		# Les annonces de changements (flux d'événements) partent tout de suite, sans tampon.
 		flush_interval -1
