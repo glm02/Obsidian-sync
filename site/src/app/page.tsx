@@ -7,6 +7,7 @@ import { WorkspaceDemo } from "@/components/home/workspace-demo";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { features } from "@/lib/home-content";
+import { VERSION_EXTENSION } from "@/lib/extension";
 
 export default function Home() {
   return <main id="contenu" className="landing">
@@ -15,7 +16,7 @@ export default function Home() {
       <h1>Tes notes.<br /><span>Le même horizon.</span></h1>
       <p className="hero-description">Ton coffre Obsidian. Tes amis. Ton serveur.</p>
       <div className="hero-actions"><Button asChild><Link href="/deployer" prefetch={false}>Héberger Cordée <ArrowRight aria-hidden="true" /></Link></Button><Button asChild variant="ghost"><Link href="/guide" prefetch={false}>Je suis invité <ArrowUpRight aria-hidden="true" /></Link></Button></div>
-      <p className="hero-footnote">Version 0.1 en test, fais une copie de ton coffre.</p>
+      <p className="hero-footnote">Version {VERSION_EXTENSION} en test, fais une copie de ton coffre. <Link href="/fonctionnalites#nouveautes" prefetch={false} className="underline underline-offset-4 hover:text-foreground">Quoi de neuf ?</Link></p>
       <div className="hero-workspace"><WorkspaceDemo /></div>
     </section>
     <BrandStrip />
@@ -26,7 +27,7 @@ export default function Home() {
         <Card className="feature-card"><CardContent><GitMerge className="feature-icon" aria-hidden="true" /><div className="feature-visual merge-visual" aria-hidden="true"><span>+ Ton idée</span><span>+ La sienne</span><Check className="size-3" /></div><h3>Chaque ligne compte.</h3><p>La fusion conserve vos deux versions.</p></CardContent></Card>
         <Card className="feature-card"><CardContent><Smartphone className="feature-icon" aria-hidden="true" /><div className="feature-visual device-visual" aria-hidden="true"><span className="mini-desktop"><i /><i /><i /></span><span className="mini-phone"><i /><i /></span></div><h3>Au creux de la main.</h3><p>Ordinateur. Android. iOS.</p></CardContent></Card>
       </div>
-      <details className="feature-details"><summary className="flex items-center justify-between gap-4 py-5 text-xs text-soft hover:text-foreground">Toutes les fonctionnalités de la v0.1<ChevronDown className="size-3.5" aria-hidden="true" /></summary><table className="data-table"><caption className="sr-only">Fonctionnalités de la version 0.1</caption><thead><tr><th scope="col">Fonction</th><th scope="col">Détail</th></tr></thead><tbody>{features.map(([name, description]) => <tr key={name}><td>{name}</td><td>{description}</td></tr>)}</tbody></table></details>
+      <details className="feature-details"><summary className="flex items-center justify-between gap-4 py-5 text-xs text-soft hover:text-foreground">Le tableau de la première version<ChevronDown className="size-3.5" aria-hidden="true" /></summary><table className="data-table"><caption className="sr-only">Fonctionnalités de la version 0.1</caption><thead><tr><th scope="col">Fonction</th><th scope="col">Détail</th></tr></thead><tbody>{features.map(([name, description]) => <tr key={name}><td>{name}</td><td>{description}</td></tr>)}</tbody></table></details><p className="mt-4 text-xs"><Link href="/fonctionnalites" prefetch={false} className="text-soft underline underline-offset-4 hover:text-foreground">Toutes les fonctionnalités, à jour, et les nouveautés de chaque version</Link></p>
     </section>
     <section className="shell landing-section" data-reveal><AudienceTabs /></section>
     <section className="shell landing-section privacy-section" data-reveal>
