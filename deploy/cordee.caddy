@@ -3,6 +3,11 @@ cordee.exemple.fr {
 	reverse_proxy 127.0.0.1:8800 {
 		# On remplace l'en-tête au lieu de le compléter : un client ne peut pas se faire passer pour une autre adresse.
 		header_up X-Real-IP {remote_host}
+		# Serveur derrière Cloudflare (ports 80/443 ouverts aux seules plages Cloudflare) :
+		# {remote_host} serait l'adresse de Cloudflare, pas du visiteur. Utiliser alors la ligne
+		# ci-dessous à la place, fiable seulement si le pare-feu refuse tout ce qui ne vient pas de Cloudflare.
+		# header_up X-Real-IP {http.request.header.CF-Connecting-IP}
+
 		# Les annonces de changements (flux d'événements) partent tout de suite, sans tampon.
 		flush_interval -1
 	}
