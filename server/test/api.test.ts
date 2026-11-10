@@ -16,6 +16,17 @@ const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCA
 const WEBP = 'data:image/webp;base64,UklGRjIAAABXRUJQVlA4ICYAAACQAQCdASoBAAEAAUAmJQBOl0AAhgAA/uJGvtTBJGUv+vgCniQAAA==';
 const JPEG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDQooor0jgP/9k=';
 let srv: Awaited<ReturnType<typeof demarrer>>;
+async function ecrireVersion(s: Awaited<ReturnType<typeof demarrer>>, coffreId: string, jeton: string,
+  chemin: string, contenu: string | Buffer | null, base: string | null = null) {
+  const hash = contenu === null ? null : createHash('sha256').update(contenu).digest('hex');
+  const route = `/api/coffres/${coffreId}`;
+  if (contenu !== null) assert.equal((await fetch(`${s.url}${route}/blobs/${hash}`, {
+    method: 'PUT', body: contenu, headers: { Authorization: 'Bearer ' + jeton },
+  })).status, 200);
+  const resultat = await s.appel('POST', route + '/fichiers', { chemin, hash, base }, jeton);
+  assert.equal(resultat.statut, 200, JSON.stringify(resultat.json));
+  return { rev: resultat.json.rev as number, hash };
+}
 before(async () => { srv = await demarrer(); });
 after(async () => { await srv.arreter(); });
 
@@ -239,6 +250,160 @@ test('le nom et la photo de son profil se modifient séparément ou ensemble san
     assert.deepEqual((await s.appel('PUT', route, { nom: 'Z', avatar: null }, a.jeton)).json, profilAttendu('Z', null));
     await s.appel('DELETE', coffre + '/membres/moi', undefined, a.jeton);
     assert.equal((await s.appel('PUT', route, { nom: 'Interdit' }, a.jeton)).statut, 403);
+  } finally { await s.arreter(); }
+});
+
+test('les dossiers vides utilisent une révision conditionnelle et ne remplacent aucun fichier', async () => {
+  const s = await demarrer();
+  try {
+    const a = (await s.appel('POST', '/api/coffres', { nom: 'Dossiers', prenom: 'Alice', codeCreation: CODE })).json;
+    const b = (await s.appel('POST', '/api/coffres', { nom: 'Autre', prenom: 'Bob', codeCreation: CODE })).json;
+    const route = `/api/coffres/${a.coffreId}`;
+    const dossier = (chemin: string, supprime = false, baseRev: number | null = null) => s.appel('POST', route + '/dossiers', { chemin, supprime, baseRev }, a.jeton);
+    assert.equal((await s.appel('POST', route + '/dossiers', { chemin: 'Vide', supprime: false, baseRev: null })).statut, 401);
+    assert.equal((await s.appel('POST', route + '/dossiers', { chemin: 'Vide', supprime: false, baseRev: null }, b.jeton)).statut, 403);
+    for (const corps of [null, { chemin: '../non', supprime: false, baseRev: null }, { chemin: 'Vide', supprime: 0, baseRev: null },
+      { chemin: 'Vide', supprime: false }, { chemin: 'Vide', supprime: false, baseRev: 0 }, { chemin: 'Vide', supprime: false, baseRev: 1.5 }]) {
+      assert.equal((await s.appel('POST', route + '/dossiers', corps, a.jeton)).statut, 400);
+    }
+    const vide = await dossier('Vide');
+    assert.equal(vide.statut, 200);
+    assert.equal(vide.json.rev, 1);
+    await dossier('Autre dossier');
+    assert.deepEqual((await dossier('Vide')).json, { rev: 1, inchange: true });
+    assert.equal((await dossier('Vide', true, 999)).statut, 409);
+    const supprime = await dossier('Vide', true, 1);
+    assert.equal(supprime.statut, 200);
+    assert.deepEqual((await dossier('Vide', true, 1)).json, { rev: supprime.json.rev, inchange: true });
+    assert.equal((await dossier('Vide', false, 1)).statut, 409);
+    const recree = await dossier('Vide');
+    assert.equal(recree.statut, 200);
+    const info = (await s.appel('GET', route + '/changements', undefined, a.jeton)).json;
+    const histoire = info.changements.filter((c: { chemin: string }) => c.chemin === 'Vide');
+    assert.deepEqual(histoire.map((c: { type: string; supprime: boolean; hash: string | null }) => [c.type, c.supprime, c.hash]),
+      [['dossier', false, null], ['dossier', true, null], ['dossier', false, null]]);
+
+    const contenu = 'Le fichier reste intact';
+    const h = sha(contenu);
+    await fetch(`${s.url}${route}/blobs/${h}`, { method: 'PUT', body: contenu, headers: { Authorization: 'Bearer ' + a.jeton } });
+    assert.equal((await s.appel('POST', route + '/fichiers', { chemin: 'Vide', hash: h, base: null }, a.jeton)).statut, 409);
+    const fichier = await ecrireVersion(s, a.coffreId, a.jeton, 'occupe', contenu);
+    assert.equal((await dossier('occupe')).statut, 409);
+    assert.equal((await dossier('occupe', true)).statut, 409);
+    assert.equal((await dossier('occupe/enfant')).statut, 409);
+    assert.equal((await s.appel('POST', route + '/fichiers', { chemin: 'occupe/enfant.md', hash: h, base: null }, a.jeton)).statut, 409);
+    assert.equal(fichier.hash, h);
+
+    const parent = await dossier('Étage_%');
+    const enfant = await dossier('Étage_%/Vide');
+    assert.equal((await dossier('Étage_%', true, parent.json.rev)).statut, 409);
+    assert.equal((await dossier('Étage_%/Vide', true, enfant.json.rev)).statut, 200);
+    const note = await ecrireVersion(s, a.coffreId, a.jeton, 'Étage_%/note.md', 'Une note');
+    assert.equal((await dossier('Étage_%', true, parent.json.rev)).statut, 409);
+    await ecrireVersion(s, a.coffreId, a.jeton, 'Étage_%/note.md', null, note.hash);
+    assert.equal((await dossier('Étage_%', true, parent.json.rev)).statut, 200);
+
+    const implicite = await ecrireVersion(s, a.coffreId, a.jeton, 'Implicite/note.md', 'Dossier ancien client');
+    assert.equal((await dossier('Implicite', true)).statut, 409);
+    assert.equal((await s.appel('POST', route + '/fichiers', { chemin: 'Implicite', hash: h, base: null }, a.jeton)).statut, 409);
+    await ecrireVersion(s, a.coffreId, a.jeton, 'Implicite/note.md', null, implicite.hash);
+    assert.equal((await dossier('Implicite', true)).statut, 200);
+    const comparaison = (await s.appel('GET', route + `/revisions/${recree.json.rev}`, undefined, a.jeton)).json;
+    assert.equal(comparaison.raison, 'dossier');
+    assert.equal(comparaison.avant, null);
+    assert.equal(comparaison.apres, null);
+  } finally { await s.arreter(); }
+});
+
+test('les révisions comparent exactement les versions et bornent les aperçus de texte', async () => {
+  const s = await demarrer();
+  try {
+    const a = (await s.appel('POST', '/api/coffres', { nom: 'Versions', prenom: 'Alice', codeCreation: CODE })).json;
+    const b = (await s.appel('POST', '/api/coffres', { nom: 'Autre', prenom: 'Bob', codeCreation: CODE })).json;
+    const route = `/api/coffres/${a.coffreId}`;
+    const revision = (rev: number) => s.appel('GET', route + `/revisions/${rev}`, undefined, a.jeton);
+    const avant = '# Note\n<script>contenu littéral</script>\n';
+    const apres = '# Note\nDu texte corrigé\n';
+    const v1 = await ecrireVersion(s, a.coffreId, a.jeton, 'note.md', avant);
+    await ecrireVersion(s, a.coffreId, a.jeton, 'autre.txt', 'Intermédiaire');
+    const v2 = await ecrireVersion(s, a.coffreId, a.jeton, 'note.md', apres, v1.hash);
+    let lu = await revision(v2.rev);
+    assert.equal(lu.statut, 200);
+    assert.equal(lu.json.raison, null);
+    assert.equal(lu.json.avant, avant);
+    assert.equal(lu.json.apres, apres);
+    assert.equal(lu.json.changement.avantHash, v1.hash);
+    assert.equal(lu.json.changement.type, 'fichier');
+    const v3 = await ecrireVersion(s, a.coffreId, a.jeton, 'note.md', null, v2.hash);
+    lu = await revision(v3.rev);
+    assert.equal(lu.json.avant, apres);
+    assert.equal(lu.json.apres, null);
+    const v4 = await ecrireVersion(s, a.coffreId, a.jeton, 'note.md', 'Recréée');
+    lu = await revision(v4.rev);
+    assert.equal(lu.json.changement.avantHash, null);
+    assert.equal(lu.json.avant, null);
+    assert.equal(lu.json.apres, 'Recréée');
+    const ancienne = await revision(v2.rev);
+    assert.equal(ancienne.json.avant, avant);
+    assert.equal(ancienne.json.apres, apres);
+
+    const pile = await ecrireVersion(s, a.coffreId, a.jeton, 'taille.csv', 'a'.repeat(256 * 1024));
+    assert.equal((await revision(pile.rev)).json.apres.length, 256 * 1024);
+    const trop = await ecrireVersion(s, a.coffreId, a.jeton, 'taille.csv', 'b'.repeat(256 * 1024 + 1), pile.hash);
+    assert.deepEqual([(await revision(trop.rev)).json.raison, (await revision(trop.rev)).json.apres], ['volumineux', null]);
+    const retour = await ecrireVersion(s, a.coffreId, a.jeton, 'taille.csv', 'Petit', trop.hash);
+    lu = await revision(retour.rev);
+    assert.deepEqual([lu.json.raison, lu.json.avant, lu.json.apres], ['volumineux', null, null]);
+    for (const [chemin, contenu] of [['document.pdf', 'PDF'], ['page.html', '<script>alerte</script>'],
+      ['binaire.md', Buffer.from([1, 0, 2])], ['invalide.txt', Buffer.from([195, 40])]] as Array<[string, string | Buffer]>) {
+      const v = await ecrireVersion(s, a.coffreId, a.jeton, chemin, contenu);
+      lu = await revision(v.rev);
+      assert.deepEqual([lu.json.raison, lu.json.avant, lu.json.apres], ['binaire', null, null]);
+    }
+    assert.equal((await revision(99999)).statut, 404);
+    assert.equal((await revision(0)).statut, 400);
+    assert.equal((await s.appel('GET', route + `/revisions/${v1.rev}`)).statut, 401);
+    assert.equal((await s.appel('GET', route + `/revisions/${v1.rev}`, undefined, b.jeton)).statut, 403);
+    assert.equal((await s.appel('GET', `/api/coffres/${b.coffreId}/revisions/${v1.rev}`, undefined, a.jeton)).statut, 403);
+  } finally { await s.arreter(); }
+});
+
+test('l’activité est récente, filtrable par identifiant et limitée sans exposer un autre coffre', async () => {
+  const s = await demarrer();
+  try {
+    const a = (await s.appel('POST', '/api/coffres', { nom: 'Activité', prenom: 'Alice', codeCreation: CODE })).json;
+    const b = (await s.appel('POST', '/api/coffres', { nom: 'Privé', prenom: 'Camille', codeCreation: CODE })).json;
+    const route = `/api/coffres/${a.coffreId}`;
+    const inv = (await s.appel('POST', route + '/invitations', {}, a.jeton)).json;
+    const ami = (await s.appel('POST', '/api/rejoindre', { code: inv.code, prenom: 'Bob' })).json;
+    const amiId = (await s.appel('GET', route, undefined, ami.jeton)).json.moiId;
+    const autreId = (await s.appel('GET', `/api/coffres/${b.coffreId}`, undefined, b.jeton)).json.moiId;
+    await s.appel('PUT', route + '/profil', { avatar: PNG }, ami.jeton);
+    const note = await ecrireVersion(s, a.coffreId, a.jeton, 'note.md', 'Alice écrit');
+    const bob = await ecrireVersion(s, a.coffreId, ami.jeton, 'note.md', 'Bob corrige', note.hash);
+    for (let i = 0; i < 105; i++) assert.equal((await s.appel('POST', route + '/dossiers',
+      { chemin: 'Vide-' + i, supprime: false, baseRev: null }, a.jeton)).statut, 200);
+    const activite = (query = '') => s.appel('GET', route + '/activite' + query, undefined, a.jeton);
+    let reponse = (await activite()).json;
+    assert.equal(reponse.changements.length, 40);
+    assert.equal(reponse.plus, true);
+    assert.ok(reponse.changements.every((c: { rev: number }, i: number, liste: Array<{ rev: number }>) => i === 0 || c.rev < liste[i - 1].rev));
+    assert.equal(reponse.membres.find((m: { id: string }) => m.id === amiId).avatar, PNG);
+    assert.equal(reponse.membres.some((m: { id: string }) => m.id === autreId), false);
+    assert.equal((await activite('?limite=9999')).json.changements.length, 100);
+    reponse = (await activite('?limite=2')).json;
+    assert.equal(reponse.changements.length, 2);
+    reponse = (await activite('?auteur=' + amiId)).json;
+    assert.equal(reponse.changements.length, 1);
+    assert.equal(reponse.changements[0].rev, bob.rev);
+    assert.equal(reponse.changements[0].avantHash, note.hash);
+    assert.equal(reponse.changements[0].auteurId, amiId);
+    assert.equal(reponse.plus, false);
+    assert.deepEqual((await activite('?auteur=' + autreId)).json.changements, []);
+    assert.equal((await activite('?auteur=%27%20OR%201%3D1')).statut, 400);
+    assert.equal((await s.appel('GET', route + '/activite')).statut, 401);
+    assert.equal((await s.appel('GET', route + '/activite', undefined, b.jeton)).statut, 403);
+    assert.deepEqual(Object.keys((await s.appel('GET', route + '?revision=1', undefined, a.jeton)).json).sort(), ['id', 'nom', 'rev']);
   } finally { await s.arreter(); }
 });
 

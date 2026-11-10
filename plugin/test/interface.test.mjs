@@ -11,12 +11,20 @@ function charger(etat, navigateur = {}) {
       const descendants = new Set();
       const ajouter = (node) => { descendants.add(node); node.enfants.forEach(ajouter); };
       this.enfants.forEach(ajouter); this.enfants = [];
+      for (const enfant of descendants) if (rendu.boutons.get(enfant.labelBouton) === enfant.actionBouton) rendu.boutons.delete(enfant.labelBouton);
       rendu.elements = rendu.elements.filter((element) => !descendants.has(element));
       if (racine) { rendu.textes = []; rendu.boutons.clear(); rendu.champs = []; }
     },
-    setText(text) { this.textContent = text; rendu.textes.push(text); },
+    enregistrerBouton() {
+      if (this.tag !== 'button' || !this.action) return;
+      if (rendu.boutons.get(this.labelBouton) === this.actionBouton) rendu.boutons.delete(this.labelBouton);
+      this.labelBouton = this.attrs.attr?.['aria-label'] || this.textContent;
+      this.actionBouton = () => !this.disabled && this.action(); rendu.boutons.set(this.labelBouton, this.actionBouton);
+    },
+    setText(text) { this.textContent = text; rendu.textes.push(text); this.enregistrerBouton(); },
+    setAttribute(nom, valeur) { this.attrs.attr ||= {}; this.attrs.attr[nom] = valeur; this.enregistrerBouton(); },
     replaceWith() { rendu.elements = rendu.elements.filter((element) => element !== this); },
-    createEl(tag, attrs = {}) { const enfant = container(false); enfant.tag = tag; enfant.attrs = attrs; enfant.textContent = attrs.text || ''; if (attrs.text) rendu.textes.push(attrs.text); this.enfants.push(enfant); rendu.elements.push(enfant); return enfant; },
+    createEl(tag, attrs = {}) { const enfant = container(false); enfant.tag = tag; enfant.attrs = attrs; enfant.textContent = attrs.text || ''; if (attrs.text) rendu.textes.push(attrs.text); Object.defineProperty(enfant, 'onclick', { set(action) { this.action = action; this.enregistrerBouton(); } }); this.enfants.push(enfant); rendu.elements.push(enfant); return enfant; },
   });
   const obsidian = {
     Plugin: class {
@@ -46,12 +54,14 @@ function charger(etat, navigateur = {}) {
         return this;
       }
     },
+    TFile: class {},
+    TFolder: class {},
     addIcon(id, svg) { rendu.icone = { id, svg }; },
     Notice: class { constructor(text) { rendu.notice = text; } },
   };
   const context = { require: () => obsidian, module: { exports: {} }, TextEncoder, TextDecoder, clearTimeout, URL, URLSearchParams, atob, window: { setInterval: callback => callback }, ...navigateur };
   vm.runInNewContext(readFileSync(new URL('../main.js', import.meta.url), 'utf8'), context);
-  return { plugin: new context.module.exports(), rendu, interne: context.module.exports.interne };
+  return { plugin: new context.module.exports(), rendu, obsidian, interne: context.module.exports.interne };
 }
 
 test('le logo ouvre le partage connecté et conserve le formulaire après déconnexion', async () => {
@@ -67,6 +77,7 @@ test('le logo ouvre le partage connecté et conserve le formulaire après décon
   assert.ok(rendu.textes.includes('Coffre partagé : Notre coffre'));
   await rendu.boutons.get('Créer une invitation')();
   assert.equal(invitations, 1);
+  await rendu.boutons.get('Configurer')();
   await rendu.boutons.get('Quitter')();
   assert.ok(rendu.textes.includes('Rejoindre un coffre'));
   assert.ok(rendu.boutons.has('Rejoindre'));
@@ -191,12 +202,11 @@ test('le panneau met à jour son état sans accumuler des abonnements', async ()
   assert.equal(plugin.abonnesStatut.size, 0);
 });
 
-test('les membres et les changements se consultent depuis le panneau', async () => {
+test('les membres et les changements se consultent directement dans le panneau', async () => {
   const { plugin, rendu } = charger({ serveur: 'https://cordee.example', coffreId: 'test', jeton: 'test-token', nomCoffre: 'Notre coffre' });
   await plugin.onload();
   plugin.moteur.api = async (methode, route) => ({ json: async () => route.endsWith('/test') ? { rev: 1, membres: [{ nom: 'Membre test', arrive_le: 1700000000000 }] } : { changements: [{ chemin: 'note.md', auteur: 'Membre test', le: 1700000000000, supprime: false }] } });
-  plugin.ruban.callback();
-  await rendu.boutons.get('Voir l’activité')();
+  await plugin.ruban.callback();
   assert.ok(rendu.textes.includes('1 membre'));
   assert.ok(rendu.textes.some(text => text.includes('Membre test')));
   assert.ok(rendu.textes.some(text => text.includes('a modifié note.md')));
@@ -241,6 +251,24 @@ function navigateurPhoto() {
 function fichierPhoto(type = 'image/jpeg', size = 4, octets = [255, 216, 255, 217]) {
   return { type, size, slice: () => ({ arrayBuffer: async () => new Uint8Array(octets).buffer }) };
 }
+
+test('un dossier distant ne supprime ni fichier caché ni fichier arrivé pendant la vérification', async () => {
+  const { plugin } = charger({});
+  let suppressions = 0;
+  plugin.app.vault.adapter = {
+    list: async () => ({ files: ['Partage/.secret'], folders: [] }),
+    rmdir: async () => { assert.fail('Le fichier caché doit empêcher toute suppression'); },
+    exists: async () => true,
+  };
+  await plugin.onload();
+  const fichiers = plugin.moteur.fichiers;
+  assert.equal(await fichiers.supprimerDossierVide('Partage'), false);
+  plugin.app.vault.adapter.list = async () => ({ files: [], folders: [] });
+  plugin.app.vault.adapter.rmdir = async (chemin, recursif) => { suppressions++; assert.equal(recursif, false); throw Error('Un fichier vient d’arriver'); };
+  assert.equal(await fichiers.supprimerDossierVide('Partage'), false);
+  assert.equal(suppressions, 1);
+  await assert.rejects(fichiers.supprimerDossierVide('CONFIGURATION'), /configuration/);
+});
 
 test('la préparation recadre en 128 px et refuse SVG, fichiers falsifiés et fichiers trop gros', async () => {
   const { interne } = charger({});
@@ -295,7 +323,7 @@ test('l’activité associe la photo à l’identifiant de l’auteur malgré le
     { auteurId: 'm2', auteur: 'Même nom', chemin: 'note.md', le: 1700000000000, supprime: false },
     { auteurId: 'ancien', auteur: 'Ancien membre', chemin: 'image.png', le: 1700000000000, supprime: true },
   ] } });
-  plugin.ruban.callback(); await rendu.boutons.get('Voir l’activité')();
+  await plugin.ruban.callback();
   const images = rendu.elements.filter((element) => element.tag === 'img');
   assert.deepEqual(images.map((image) => image.attrs.attr.src), [JPEG_TEST, PNG_TEST, PNG_TEST]);
   assert.ok(images.every((image) => image.attrs.attr.alt === 'Photo de Même nom'));
@@ -423,4 +451,72 @@ test('fermer pendant un renommage conserve le succès pour le même coffre sans 
     assert.equal(plugin.etat.prenom, changerCoffre ? ETAT_TEST.prenom : 'Nom en cours');
     assert.equal(rendu.modal.contentEl.enfants.length, 0); assert.equal(rendu.boutons.has('Enregistrer le nom'), false);
   }
+});
+
+// Faux coffre qui se comporte comme un disque Windows : « S3/PApp3 » et « S3/PAPP3 » sont le même dossier pour le système,
+// mais l'index d'Obsidian les distingue.
+function vaultSansCasse(obsidian, { dossiers = [], fichiers = {} } = {}) {
+  const elements = new Map();
+  const dossier = (path) => Object.assign(new obsidian.TFolder(), { path });
+  const fichier = (path, contenu) => Object.assign(new obsidian.TFile(), { path, contenu, stat: { mtime: 1, size: contenu.byteLength } });
+  for (const d of dossiers) elements.set(d, dossier(d));
+  for (const [path, contenu] of Object.entries(fichiers)) elements.set(path, fichier(path, contenu));
+  const existe = (path) => [...elements.keys()].some((k) => k.toLowerCase() === path.toLowerCase());
+  return {
+    elements,
+    configDir: 'configuration',
+    getFiles: () => [...elements.values()].filter((e) => e instanceof obsidian.TFile),
+    getAllLoadedFiles: () => [...elements.values()],
+    getAbstractFileByPath: (path) => elements.get(path) || null,
+    createFolder: async (path) => { if (existe(path)) throw new Error('Folder already exists.'); elements.set(path, dossier(path)); },
+    createBinary: async (path, contenu) => { if (existe(path)) throw new Error('File already exists.'); elements.set(path, fichier(path, contenu)); },
+    modifyBinary: async (f, contenu) => { f.contenu = contenu; },
+    rename: async (element, vers) => {
+      const avant = element.path;
+      for (const [k, e] of [...elements]) {
+        if (k !== avant && !k.startsWith(avant + '/')) continue;
+        elements.delete(k); e.path = vers + k.slice(avant.length); elements.set(e.path, e);
+      }
+    },
+    adapter: { exists: async (path) => existe(path) },
+  };
+}
+
+test('sur un disque insensible à la casse, un dossier existant prend la casse du serveur au lieu de faire échouer la synchro', async () => {
+  const { plugin, obsidian } = charger({});
+  const vault = vaultSansCasse(obsidian, {
+    dossiers: ['S3', 'S3/PApp3', 'S3/PApp3/TP'],
+    fichiers: { 'S3/PApp3/TP/_dossier.md': new TextEncoder().encode('ancien').buffer },
+  });
+  Object.assign(plugin.app.vault, vault, { adapter: vault.adapter });
+  await plugin.onload();
+  const nouveau = new TextEncoder().encode('chez Paul').buffer;
+  await plugin.moteur.fichiers.ecrire('S3/PAPP3/TP/_dossier.md', nouveau);
+  assert.deepEqual([...vault.elements.keys()].sort(), ['S3', 'S3/PAPP3', 'S3/PAPP3/TP', 'S3/PAPP3/TP/_dossier.md']);
+  assert.equal(vault.elements.get('S3/PAPP3/TP/_dossier.md').contenu, nouveau);
+  // Le même fichier, écrit une seconde fois, reste unique.
+  await plugin.moteur.fichiers.ecrire('S3/PAPP3/TP/_dossier.md', nouveau);
+  assert.equal(vault.getFiles().length, 1);
+  // La suppression de l'ancien nom (renommage fait par l'ami) ne touche pas le fichier désormais nommé autrement.
+  await plugin.moteur.fichiers.supprimer('S3/PApp3/TP/_dossier.md');
+  assert.equal(vault.getFiles().length, 1);
+});
+
+test("l'état « fichiers à vérifier » et le message expliquent quel fichier n'a pas pu être écrit", async () => {
+  const { plugin } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  plugin.moteur.signaler('fichier-bloque', 'S3/PAPP3/cours.pdf', new Error('Le dossier existe déjà'));
+  assert.equal(plugin.titreStatut(), 'fichiers à vérifier');
+  assert.match(plugin.texteBloques(), /S3\/PAPP3\/cours\.pdf.*Le dossier existe déjà.*Le reste continue/);
+  plugin.moteur.signaler('synchro');
+  assert.equal(plugin.texteBloques(), '');
+});
+
+test("l'erreur affichée distingue une vraie coupure de connexion d'un problème local", () => {
+  const { interne } = charger({});
+  const reseau = Object.assign(new Error('ENOTFOUND'), { reseau: true });
+  assert.match(interne.expliquerErreur(reseau), /serveur ne répond pas/);
+  const local = interne.expliquerErreur(new Error('Le dossier existe déjà'));
+  assert.match(local, /Le dossier existe déjà/);
+  assert.doesNotMatch(local, /Vérifie ta connexion/);
 });

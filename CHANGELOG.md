@@ -1,5 +1,13 @@
 # Nouveautés
 
+## 0.1.5
+
+- **Un fichier qui ne peut pas être écrit ne bloque plus la synchronisation.** Avant, un seul changement impossible à appliquer (par exemple un dossier que l’ami avait renommé en changeant seulement les majuscules, sur Windows ou macOS) arrêtait tout : plus rien n’arrivait et plus rien n’était envoyé, avec le message trompeur « vérifie ta connexion ». Le fichier est maintenant mis de côté, réessayé à chaque synchro, et signalé par son nom ; le reste continue.
+- Sur un disque qui ne distingue pas les majuscules, un dossier ou un fichier existant prend la casse du serveur au lieu d’échouer ou d’être écrasé.
+- Le message d’erreur dit la vraie cause : « le serveur ne répond pas » seulement quand c’est le cas, sinon le détail du problème.
+- Les dossiers, même vides, sont partagés entre les membres (le serveur doit être à jour ; un ancien serveur continue de synchroniser les notes).
+- Comparaison d’une version avec la précédente et activité filtrable par membre (serveur à jour requis).
+
 ## 0.1.4
 
 - Nom affiché modifiable dans Mon profil, sans changer sa photo ni perdre l’attribution de ses changements.

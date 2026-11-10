@@ -145,6 +145,10 @@ function dansConfiguration(chemin, dossier) {
 class Moteur {
   constructor({ etat, sauver, fichiers, http, signaler, ignorer, tailleMax }) {
     this.etat = etat;
+    this.etat.dossiers = Object.assign(Object.create(null), this.etat.dossiers || {});
+    // Changements reçus mais impossibles à appliquer ici (ex. nom qui ne diffère que par les majuscules sur Windows).
+    // On les garde de côté et on les réessaie à chaque synchro : ils ne doivent pas bloquer le reste.
+    this.etat.enAttente = Object.assign(Object.create(null), this.etat.enAttente || {});
     this.sauver = sauver || (async () => {});
     this.fichiers = fichiers;
     this.http = http;
@@ -159,12 +163,15 @@ class Moteur {
   racine() { return `/api/coffres/${this.etat.coffreId}`; }
 
   async api(methode, p, corps) {
-    const r = await this.http({
-      methode, url: this.url(p),
-      entetes: { Authorization: 'Bearer ' + this.etat.jeton },
-      corps: corps === undefined ? undefined : JSON.stringify(corps),
-      type: corps === undefined ? undefined : 'application/json',
-    });
+    let r;
+    try {
+      r = await this.http({
+        methode, url: this.url(p),
+        entetes: { Authorization: 'Bearer ' + this.etat.jeton },
+        corps: corps === undefined ? undefined : JSON.stringify(corps),
+        type: corps === undefined ? undefined : 'application/json',
+      });
+    } catch (e) { e.reseau = true; throw e; } // pas de réponse du serveur : c'est bien un problème de connexion
     if (r.statut >= 400 && r.statut !== 409) {
       let msg = `Erreur ${r.statut}`;
       try { msg = (await r.json()).erreur || msg; } catch (e) { /* corps vide */ }
@@ -195,7 +202,9 @@ class Moteur {
   }
 
   async envoyerBlob(hash, buf) {
-    const r = await this.http({ methode: 'PUT', url: this.url(`${this.racine()}/blobs/${hash}`), entetes: { Authorization: 'Bearer ' + this.etat.jeton }, corps: buf, type: 'application/octet-stream' });
+    let r;
+    try { r = await this.http({ methode: 'PUT', url: this.url(`${this.racine()}/blobs/${hash}`), entetes: { Authorization: 'Bearer ' + this.etat.jeton }, corps: buf, type: 'application/octet-stream' }); }
+    catch (e) { e.reseau = true; throw e; }
     if (r.statut >= 400) { const erreur = new Error(`Envoi refusé (${r.statut})`); erreur.statut = r.statut; throw erreur; }
   }
 
@@ -229,18 +238,59 @@ class Moteur {
 
   async recuperer() {
     let plus = true;
+    const traites = new Set();
     while (plus) {
       const r = await (await this.api('GET', `${this.racine()}/changements?depuis=${this.etat.derniereRev}`)).json();
       const derniers = new Map();
-      for (const c of r.changements) derniers.set(c.chemin, c);
-      for (const c of derniers.values()) if (!this.ignorer(c.chemin)) await this.appliquer(c);
+      for (const c of r.changements) derniers.set(`${c.type || 'fichier'}:${c.chemin}`, c);
+      for (const [cle, c] of [...derniers.entries()].sort((a, b) => a[1].rev - b[1].rev)) {
+        traites.add(cle);
+        if (!this.ignorer(c.chemin)) await this.appliquerSansBloquer(c);
+      }
       if (r.changements.length) this.etat.derniereRev = r.changements[r.changements.length - 1].rev;
       plus = r.plus;
       await this.sauver();
     }
+    // Les changements mis de côté lors d'une synchro précédente : une nouvelle chance, sans bloquer le reste.
+    for (const [cle, c] of Object.entries(this.etat.enAttente)) {
+      if (traites.has(cle)) continue;
+      if (this.ignorer(c.chemin)) { delete this.etat.enAttente[cle]; continue; }
+      await this.appliquerSansBloquer(c);
+    }
+    await this.sauver();
+  }
+
+  /**
+   * Applique un changement reçu. Si l'écriture échoue sur CET appareil (nom déjà pris à la casse près,
+   * fichier verrouillé…), le changement est mis de côté et le reste de la synchro continue :
+   * un seul fichier récalcitrant ne doit pas empêcher d'envoyer ni de recevoir les autres.
+   * Un vrai problème de serveur ou de réseau, lui, arrête la synchro comme avant.
+   */
+  async appliquerSansBloquer(c) {
+    const cle = `${c.type || 'fichier'}:${c.chemin}`;
+    try {
+      await this.appliquer(c);
+      delete this.etat.enAttente[cle];
+    } catch (e) {
+      if (e?.reseau || [401, 403, 429].includes(e?.statut) || e?.statut >= 500) throw e;
+      this.etat.enAttente[cle] = { rev: c.rev, chemin: c.chemin, hash: c.hash ?? null, supprime: !!c.supprime, type: c.type || 'fichier', auteur: c.auteur ?? null };
+      this.signaler('fichier-bloque', c.chemin, e);
+    }
   }
 
   async appliquer(c) {
+    if (c.type === 'dossier') {
+      if (!this.fichiers.creerDossier || !this.fichiers.supprimerDossierVide) return;
+      if (c.supprime) {
+        const retire = await this.fichiers.supprimerDossierVide(c.chemin);
+        delete this.etat.dossiers[c.chemin];
+        if (!retire) this.signaler('dossier-conserve', c.chemin);
+      } else {
+        await this.fichiers.creerDossier(c.chemin);
+        this.etat.dossiers[c.chemin] = c.rev;
+      }
+      return;
+    }
     const base = this.etat.bases[c.chemin] || null;
     const distant = c.supprime ? null : c.hash;
     if (distant === base) return;
@@ -283,7 +333,7 @@ class Moteur {
 
   /** Envoie les changements locaux. Renvoie le nombre d'écritures refusées car périmées. */
   async envoyer() {
-    let refus = 0;
+    let refus = await this.envoyerDossiers(false);
     const presents = new Set();
     for (const f of this.fichiers.lister()) {
       if (this.ignorer(f.chemin)) continue;
@@ -308,20 +358,49 @@ class Moteur {
       delete this.etat.bases[p];
       delete this.etat.cache[p];
     }
+    return refus + await this.envoyerDossiers(true);
+  }
+
+  async envoyerDossiers(supprimer) {
+    if (!this.fichiers.listerDossiers || this.dossiersDisponibles === false) return 0;
+    const presents = new Set(this.fichiers.listerDossiers().filter((p) => !this.ignorer(p)));
+    const connus = Object.keys(this.etat.dossiers).filter((p) => !this.ignorer(p));
+    const chemins = supprimer ? connus.filter((p) => !presents.has(p)) : [...presents].filter((p) => !Object.hasOwn(this.etat.dossiers, p));
+    if (supprimer && chemins.length > 20 && chemins.length > connus.length / 2) {
+      this.signaler('garde-fou', chemins.length, 'dossiers');
+      return 0;
+    }
+    chemins.sort((a, b) => supprimer ? b.split('/').length - a.split('/').length : a.split('/').length - b.split('/').length);
+    let refus = 0;
+    for (const chemin of chemins) {
+      try {
+        const reponse = await this.api('POST', `${this.racine()}/dossiers`, { chemin, supprime: supprimer, baseRev: this.etat.dossiers[chemin] ?? null });
+        if (reponse.statut === 409) { refus++; this.signaler('dossier-en-attente', chemin); continue; }
+        const resultat = await reponse.json();
+        if (supprimer) delete this.etat.dossiers[chemin]; else this.etat.dossiers[chemin] = resultat.rev;
+        this.signaler('dossier-ok', chemin);
+        this.dossiersDisponibles = true;
+      } catch (erreur) {
+        if (erreur.statut === 404) { this.dossiersDisponibles = false; this.signaler('dossiers-indisponibles'); break; }
+        throw erreur;
+      }
+    }
     return refus;
   }
 }
 
 /* ---------- Intégration Obsidian ---------- */
 
-const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null };
+const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiers: {}, enAttente: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null };
 
 function expliquerErreur(erreur) {
   if ([401, 403].includes(erreur?.statut)) return 'Accès refusé. Ton accès au coffre a peut-être été retiré : demande une nouvelle invitation.';
   if (erreur?.statut === 429) return 'Trop de tentatives. Patiente une minute avant de réessayer.';
   if (erreur?.statut === 413) return 'Un fichier dépasse la taille autorisée par le serveur. Réduis sa taille ou exclus son dossier, puis réessaie.';
   if (erreur?.statut >= 500) return 'Le serveur rencontre un problème. Tes notes restent sur cet appareil ; tu peux réessayer plus tard.';
-  return 'Synchronisation impossible. Vérifie ta connexion et la disponibilité du serveur, puis réessaie. Tes notes locales sont conservées.';
+  if (erreur?.reseau) return 'Le serveur ne répond pas. Vérifie ta connexion Internet et l’adresse du serveur, puis réessaie. Tes notes locales sont conservées.';
+  const detail = String(erreur?.message || '').replace(/\s+/g, ' ').trim().slice(0, 140);
+  return `La synchronisation a rencontré un problème${detail ? ' : ' + detail : ''}. Le serveur répond ; tes notes locales sont conservées.`;
 }
 
 const TAILLE_AVATAR_MAX = 32 * 1024;
@@ -401,25 +480,83 @@ function httpObsidian({ methode, url, entetes, corps, type }) {
 
 function fichiersObsidian(app) {
   const vault = app.vault;
+  const dossiersAbsents = new Set();
+  const estDossier = (f) => !!(O.TFolder && f instanceof O.TFolder);
   const verifier = (p) => { if (dansConfiguration(p, vault.configDir)) throw new Error('Le dossier de configuration du coffre n’est pas partagé.'); };
   const trouver = (p) => { if (dansConfiguration(p, vault.configDir)) return null; const f = vault.getAbstractFileByPath(p); return f instanceof O.TFile ? f : null; };
   async function dossiers(p) {
     const parts = p.split('/').slice(0, -1);
     for (let i = 1; i <= parts.length; i++) {
       const d = parts.slice(0, i).join('/');
-      if (!vault.getAbstractFileByPath(d)) await vault.createFolder(d);
+      const f = vault.getAbstractFileByPath(d);
+      if (f && !estDossier(f)) throw new Error('Un fichier empêche la création du dossier : ' + d);
+      if (dossiersAbsents.has(d)) {
+        if (!await vault.adapter.exists(d)) await vault.adapter.mkdir(d);
+        dossiersAbsents.delete(d);
+      } else if (!f) {
+        const existe = await vault.adapter.exists(d);
+        const sosie = existe ? sosieParCasse(d, true) : null;
+        if (sosie) await renommerCasse(sosie, d);
+        else if (!existe) await vault.createFolder(d);
+      }
+    }
+  }
+  // Disque insensible à la casse (Windows, macOS) : « S3/PAPP3 » et « S3/PApp3 » désignent le même dossier pour le
+  // système mais deux chemins pour Cordée. Plutôt que d'échouer, ou d'écrire dans l'un puis de supprimer l'autre,
+  // on met l'existant à la casse du serveur, qui fait foi. Sur un disque sensible à la casse, exists() reste faux : rien à faire.
+  function sosieParCasse(chemin, dossier) {
+    const bas = chemin.toLowerCase();
+    return (vault.getAllLoadedFiles?.() || []).find((f) => f.path !== chemin && f.path?.toLowerCase() === bas && estDossier(f) === dossier) || null;
+  }
+  async function renommerCasse(element, vers) {
+    try { await vault.rename(element, vers); }
+    catch { // certains systèmes refusent un renommage qui ne change que la casse : on passe par un nom intermédiaire
+      const provisoire = vers + '.cordee-casse';
+      await vault.rename(element, provisoire);
+      await vault.rename(vault.getAbstractFileByPath(provisoire), vers);
     }
   }
   return {
+    invaliderDossier: (p) => dossiersAbsents.delete(p),
     lister: () => vault.getFiles().filter((f) => !dansConfiguration(f.path, vault.configDir)).map((f) => ({ chemin: f.path, mtime: f.stat.mtime, taille: f.stat.size })),
+    listerDossiers: () => (vault.getAllLoadedFiles?.() || []).filter((f) => estDossier(f) && f.path && f.path !== '/' && !dansConfiguration(f.path, vault.configDir) && !dossiersAbsents.has(f.path)).map((f) => f.path),
+    creerDossier: async (p) => { verifier(p); await dossiers(p + '/fichier'); },
+    supprimerDossierVide: async (p) => {
+      verifier(p);
+      if (!p || p === '/') throw new Error('La racine du coffre reste locale.');
+      try {
+        // Le cache Obsidian ne voit pas tous les fichiers cachés. La vérification
+        // physique et rmdir(false) empêchent toute suppression récursive, même en course.
+        const contenu = await vault.adapter.list(p);
+        if (contenu.files.length || contenu.folders.length) return false;
+        await vault.adapter.rmdir(p, false);
+        dossiersAbsents.add(p);
+        return true;
+      } catch {
+        if (!await vault.adapter.exists(p)) { dossiersAbsents.add(p); return true; }
+        return false;
+      }
+    },
     lire: async (p) => { const f = trouver(p); return f ? vault.readBinary(f) : null; },
-    ecrire: async (p, buf) => { verifier(p); const f = trouver(p); if (f) await vault.modifyBinary(f, buf); else { await dossiers(p); await vault.createBinary(p, buf); } },
+    ecrire: async (p, buf) => {
+      verifier(p);
+      let f = trouver(p);
+      if (!f) {
+        await dossiers(p);
+        f = trouver(p); // renommer un dossier à la bonne casse y a déjà amené le fichier
+        const sosie = !f && (await vault.adapter.exists(p)) ? sosieParCasse(p, false) : null;
+        if (sosie) { await renommerCasse(sosie, p); f = trouver(p); }
+      }
+      if (f) { await vault.modifyBinary(f, buf); return; }
+      try { await vault.createBinary(p, buf); }
+      catch (e) { if (await vault.adapter.exists(p)) await vault.adapter.writeBinary(p, buf); else throw e; } // présent sur le disque mais pas encore dans l'index d'Obsidian
+    },
     supprimer: async (p) => { verifier(p); const f = trouver(p); if (f) await vault.trash(f, false); }, // corbeille locale du coffre : récupérable
     renommer: async (de, vers) => { verifier(de); verifier(vers); const f = trouver(de); if (f) await vault.rename(f, vers); },
   };
 }
 
-let InvitationModal, ActiviteModal, ProfilModal, ReglagesCordee, PanneauCordee;
+let InvitationModal, ActiviteModal, RevisionModal, ProfilModal, ReglagesCordee, PanneauCordee;
 
 class CordeePlugin extends (O ? O.Plugin : Object) {
   async onload() {
@@ -429,6 +566,8 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.derniereErreur = '';
     this.abonnesStatut = new Set();
     this.fichiersTropGros = new Set();
+    this.fichiersBloques = new Map();
+    this.dossiersEnAttente = new Set();
     this.barre = this.addStatusBarItem();
     this.moteur = this.creerMoteur();
     this.afficher('');
@@ -450,7 +589,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     });
 
     this.app.workspace.onLayoutReady(() => {
-      const plus_tard = () => this.programmer(2000);
+      const plus_tard = (f) => { if (f?.path) this.moteur.fichiers.invaliderDossier(f.path); this.programmer(2000); };
       for (const ev of ['create', 'modify', 'delete', 'rename']) this.registerEvent(this.app.vault.on(ev, plus_tard));
       this.registerInterval(window.setInterval(() => this.lancer(), 5 * 60_000)); // filet de sécurité
       this.ecouter();
@@ -477,12 +616,17 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
       http: httpObsidian,
       ignorer: (p) => dansConfiguration(p, this.app.vault.configDir) || this.etat.dossiersIgnores.split(',').map((s) => s.trim()).filter(Boolean).some((d) => dansDossier(p, d)),
       signaler: (quoi, a, b) => {
-        if (quoi === 'synchro') { this.phase = 'synchro'; this.derniereErreur = ''; this.sourceErreur = ''; this.fichiersTropGros.clear(); this.suppressionsBloquees = 0; }
+        if (quoi === 'synchro') { this.phase = 'synchro'; this.derniereErreur = ''; this.sourceErreur = ''; this.fichiersTropGros.clear(); this.fichiersBloques.clear(); this.dossiersEnAttente.clear(); this.suppressionsBloquees = 0; }
         else if (quoi === 'ok') this.phase = 'ok';
         else if (quoi === 'erreur') this.signalerErreur(a, 'synchro');
         else if (quoi === 'conflit') new O.Notice(`Cordée : ${a} modifié aussi par ${b || 'un ami'}. Les deux versions sont gardées, vérifie la note.`, 10000);
-        else if (quoi === 'garde-fou') { this.suppressionsBloquees = a; new O.Notice(`Cordée : ${a} fichiers ont disparu d'un coup. Rien n'a été supprimé sur le serveur. Vérifie ton coffre.`, 0); }
+        else if (quoi === 'garde-fou') { this.suppressionsBloquees = a; new O.Notice(`Cordée : ${a} ${b === 'dossiers' ? 'dossiers' : 'fichiers'} ont disparu d'un coup. Rien n'a été supprimé sur le serveur. Vérifie ton coffre.`, 0); }
+        else if (quoi === 'dossiers-indisponibles') new O.Notice('Cordée : ce serveur doit être mis à jour pour partager les dossiers vides. Les notes continuent à se synchroniser.', 10000);
+        else if (quoi === 'dossier-conserve') new O.Notice(`Cordée : ${a} a été conservé car il contient encore des fichiers locaux.`, 10000);
+        else if (quoi === 'dossier-en-attente') this.dossiersEnAttente.add(a);
+        else if (quoi === 'dossier-ok') this.dossiersEnAttente.delete(a);
         else if (quoi === 'fichier-trop-gros') this.fichiersTropGros.add(a);
+        else if (quoi === 'fichier-bloque') this.fichiersBloques.set(a, String(b?.message || b || '').replace(/\s+/g, ' ').slice(0, 120));
         this.afficher();
       },
     });
@@ -493,8 +637,16 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     if (this.phase === 'synchro') return this.etat.enPause ? 'fin de la synchronisation en cours…' : 'synchronisation…';
     if (this.etat.enPause) return 'en pause';
     if (this.derniereErreur) return 'connexion à vérifier';
-    if (this.fichiersTropGros.size || this.suppressionsBloquees) return 'fichiers à vérifier';
+    if (this.fichiersTropGros.size || this.fichiersBloques.size || this.suppressionsBloquees || this.dossiersEnAttente.size) return 'fichiers à vérifier';
     return this.etat.derniereSynchro ? 'à jour' : 'prêt';
+  }
+
+  /** Fichiers d'un ami qui n'ont pas pu être écrits ici : le reste se synchronise quand même. */
+  texteBloques() {
+    if (!this.fichiersBloques.size) return '';
+    const [premier, raison] = [...this.fichiersBloques.entries()][0];
+    const autres = this.fichiersBloques.size - 1;
+    return `${this.fichiersBloques.size} fichier(s) reçus n’ont pas pu être écrits sur cet appareil (${premier}${autres ? ` et ${autres} autre(s)` : ''}${raison ? ' : ' + raison : ''}). Le reste continue de se synchroniser ; Cordée réessaie à chaque synchro.`;
   }
 
   afficher() {
@@ -541,6 +693,9 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   async lancer({ forcer = false } = {}) {
     if (!this.connecte() || this.arret || (this.etat.enPause && !forcer)) return;
     await this.moteur.synchroniser();
+    const resume = this.texteBloques();
+    if (resume && resume !== this.dernierResumeBloques) new O.Notice('Cordée : ' + resume, 15000);
+    this.dernierResumeBloques = resume;
     if (this.phase === 'ok') {
       this.etat.derniereSynchro = Date.now();
       try { await this.saveData(this.etat); }
@@ -570,7 +725,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     const r = await httpObsidian({ methode: 'POST', url: serveur.replace(/\/$/, '') + chemin, corps: JSON.stringify(corps), type: 'application/json' });
     const j = await r.json();
     if (r.statut >= 400) throw new Error((j && j.erreur) || `Erreur ${r.statut}`);
-    Object.assign(this.etat, { serveur: serveur.replace(/\/$/, ''), coffreId: j.coffreId, nomCoffre: j.nom, jeton: j.jeton, prenom: corps.prenom, derniereRev: 0, bases: {}, cache: {}, enPause: false, derniereSynchro: null });
+    Object.assign(this.etat, { serveur: serveur.replace(/\/$/, ''), coffreId: j.coffreId, nomCoffre: j.nom, jeton: j.jeton, prenom: corps.prenom, derniereRev: 0, bases: {}, cache: {}, dossiers: Object.create(null), enPause: false, derniereSynchro: null });
     await this.saveData(this.etat);
     this.memoriserPreferences();
     this.afficher('');
@@ -587,10 +742,47 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
 
   async quitter() {
     try { await this.moteur.api('DELETE', `/api/coffres/${this.etat.coffreId}/membres/moi`); } catch (e) { /* hors ligne : on oublie quand même localement */ }
-    Object.assign(this.etat, { coffreId: '', nomCoffre: '', jeton: '', derniereRev: 0, bases: {}, cache: {}, enPause: false, derniereSynchro: null });
+    Object.assign(this.etat, { coffreId: '', nomCoffre: '', jeton: '', derniereRev: 0, bases: {}, cache: {}, dossiers: Object.create(null), enPause: false, derniereSynchro: null });
     await this.saveData(this.etat);
     this.afficher('');
   }
+}
+
+function calculerDiff(avant, apres) {
+  if (typeof avant !== 'string' || typeof apres !== 'string' || avant.length > 256 * 1024 || apres.length > 256 * 1024) return { limite: true, lignes: [] };
+  const decouper = (texte) => texte === '' ? [] : texte.replace(/\r\n/g, '\n').split('\n');
+  const a = decouper(avant), b = decouper(apres);
+  if (a.length > 600 || b.length > 600 || a.length * b.length > 250_000) return { limite: true, lignes: [] };
+  const largeur = b.length + 1, longueurs = new Uint16Array((a.length + 1) * largeur);
+  for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) {
+    longueurs[i * largeur + j] = a[i] === b[j] ? 1 + longueurs[(i + 1) * largeur + j + 1] : Math.max(longueurs[(i + 1) * largeur + j], longueurs[i * largeur + j + 1]);
+  }
+  const lignes = []; let i = 0, j = 0;
+  while (i < a.length || j < b.length) {
+    if (i < a.length && j < b.length && a[i] === b[j]) { lignes.push({ type: 'contexte', avant: i + 1, apres: j + 1, texte: a[i] }); i++; j++; }
+    else if (i < a.length && (j === b.length || longueurs[(i + 1) * largeur + j] >= longueurs[i * largeur + j + 1])) { lignes.push({ type: 'suppression', avant: i + 1, apres: null, texte: a[i++] }); }
+    else { lignes.push({ type: 'ajout', avant: null, apres: j + 1, texte: b[j++] }); }
+  }
+  return { limite: false, lignes };
+}
+
+function premierBlocModifie(diff, apres) {
+  const debut = diff.lignes.findIndex((ligne) => ligne.type !== 'contexte');
+  if (debut < 0 || diff.limite) return null;
+  let fin = debut;
+  while (fin + 1 < diff.lignes.length && diff.lignes[fin + 1].type !== 'contexte') fin++;
+  const lignesApres = apres.replace(/\r\n/g, '\n').split('\n');
+  const ajouts = diff.lignes.slice(debut, fin + 1).filter((ligne) => ligne.apres !== null);
+  const suivant = diff.lignes.slice(fin + 1).find((ligne) => ligne.apres !== null);
+  const premiere = Math.max(0, Math.min(lignesApres.length - 1, (ajouts[0]?.apres || suivant?.apres || lignesApres.length) - 1));
+  const derniere = ajouts.length ? ajouts[ajouts.length - 1].apres - 1 : premiere;
+  return { de: { line: premiere, ch: 0 }, a: { line: derniere, ch: lignesApres[derniere]?.length || 0 } };
+}
+
+function boutonCordee(c, texte, action, options = {}) {
+  const bouton = c.createEl('button', { text: texte, cls: 'cordee-bouton ' + (options.cls || ''), attr: { type: 'button', 'aria-label': options.label || texte, ...options.attr } });
+  bouton.onclick = () => { if (!bouton.disabled) return action(); };
+  return bouton;
 }
 
 if (O) {
@@ -700,43 +892,165 @@ if (O) {
     onClose() { this.ferme = true; ++this.tour; this.contentEl.empty(); }
   };
 
+  RevisionModal = class extends O.Modal {
+    constructor(app, plugin, revision, membre) { super(app); this.plugin = plugin; this.revision = revision; this.membre = membre; }
+    async onOpen() {
+      const c = this.contentEl, p = this.plugin;
+      this.ferme = false; const tour = this.tour = (this.tour || 0) + 1;
+      const coffreId = p.etat.coffreId, jeton = p.etat.jeton;
+      const actif = () => !this.ferme && this.tour === tour && !p.arret && p.etat.coffreId === coffreId && p.etat.jeton === jeton;
+      this.modalEl?.classList.add('cordee-tableau-modal');
+      c.empty(); c.createEl('div', { text: 'COMPARAISON', cls: 'cordee-surtitre' });
+      const titre = c.createEl('h2', { text: `Révision ${this.revision}`, cls: 'cordee-titre' });
+      const zone = c.createEl('div', { text: 'Chargement des deux versions…', cls: 'cordee-details', attr: { role: 'status' } });
+      try {
+        const r = await (await p.moteur.api('GET', `/api/coffres/${coffreId}/revisions/${this.revision}`)).json();
+        if (!actif()) return;
+        const ch = r.changement;
+        titre.setText(ch.chemin); zone.empty();
+        const auteur = zone.createEl('div', { cls: 'cordee-personne cordee-revision-auteur' });
+        afficherAvatar(auteur, ch.auteur, this.membre?.id === ch.auteurId ? this.membre.avatar : null);
+        auteur.createEl('span', { text: `${ch.auteur || 'Membre'} · ${new Date(ch.le).toLocaleString('fr-FR')} · révision ${ch.rev}` });
+        let diff = null;
+        if (r.raison) {
+          zone.createEl('p', { text: r.raison === 'dossier' ? 'Ce changement concerne un dossier. Il n’y a pas de texte à comparer.' : r.raison === 'volumineux' ? 'Cette version dépasse la limite de comparaison de 256 Ko. Le fichier reste disponible dans le coffre.' : r.raison === 'indisponible' ? 'Une version historique manque sur le serveur. Aucune différence approximative n’est présentée.' : 'Ce fichier est une image, un PDF ou un autre fichier binaire. La comparaison ligne par ligne est réservée aux notes texte.', cls: 'cordee-vide' });
+        } else {
+          diff = calculerDiff(r.avant ?? '', r.apres ?? '');
+          if (diff.limite) zone.createEl('p', { text: 'Cette note est trop longue pour une comparaison détaillée sur cet appareil. Aucune sélection automatique ne sera appliquée.', cls: 'cordee-vide' });
+          else {
+            const ajouts = diff.lignes.filter((l) => l.type === 'ajout').length, suppressions = diff.lignes.filter((l) => l.type === 'suppression').length;
+            const resume = zone.createEl('div', { cls: 'cordee-diff-resume' });
+            resume.createEl('span', { text: `+${ajouts} ajout${ajouts > 1 ? 's' : ''}`, cls: 'cordee-compte-ajout' });
+            resume.createEl('span', { text: `−${suppressions} suppression${suppressions > 1 ? 's' : ''}`, cls: 'cordee-compte-suppression' });
+            if (!ajouts && !suppressions) zone.createEl('p', { text: 'Aucune différence textuelle entre ces deux versions.', cls: 'cordee-vide' });
+            else {
+              zone.createEl('p', { text: 'Rouge : version précédente. Vert : version enregistrée par ce membre.', cls: 'cordee-details' });
+              const tableau = zone.createEl('div', { cls: 'cordee-diff', attr: { role: 'table', 'aria-label': 'Différences entre les versions' } });
+              let interruption = false;
+              diff.lignes.forEach((ligne, index) => {
+                const proche = ligne.type !== 'contexte' || diff.lignes.slice(Math.max(0, index - 3), index + 4).some((l) => l.type !== 'contexte');
+                if (!proche) { if (!interruption) tableau.createEl('div', { text: '⋯ lignes inchangées ⋯', cls: 'cordee-diff-coupure' }); interruption = true; return; }
+                interruption = false;
+                const rangee = tableau.createEl('div', { cls: `cordee-diff-ligne cordee-diff-${ligne.type}`, attr: { role: 'row' } });
+                rangee.createEl('span', { text: ligne.avant === null ? '' : String(ligne.avant), cls: 'cordee-diff-numero', attr: { role: 'cell', 'aria-label': 'Ligne précédente' } });
+                rangee.createEl('span', { text: ligne.apres === null ? '' : String(ligne.apres), cls: 'cordee-diff-numero', attr: { role: 'cell', 'aria-label': 'Ligne suivante' } });
+                rangee.createEl('span', { text: ligne.type === 'ajout' ? '+' : ligne.type === 'suppression' ? '−' : ' ', cls: 'cordee-diff-signe', attr: { role: 'cell' } });
+                rangee.createEl('code', { text: ligne.texte.length > 4000 ? ligne.texte.slice(0, 4000) + '… [ligne abrégée]' : ligne.texte || ' ', attr: { role: 'cell' } });
+              });
+            }
+          }
+        }
+        const retour = zone.createEl('p', { cls: 'cordee-details', attr: { role: 'status', 'aria-live': 'polite' } });
+        if (!ch.supprime && ch.type !== 'dossier') boutonCordee(zone, 'Ouvrir la note', async () => {
+          if (!actif()) return;
+          try {
+            await this.app.workspace.openLinkText(ch.chemin, '', false);
+            if (!actif()) return;
+            const vue = O.MarkdownView ? this.app.workspace.getActiveViewOfType?.(O.MarkdownView) : null;
+            const editeur = vue?.file?.path === ch.chemin ? vue.editor : null;
+            const bloc = diff && typeof r.apres === 'string' ? premierBlocModifie(diff, r.apres) : null;
+            if (bloc && editeur?.getValue() === r.apres) { editeur.setSelection(bloc.de, bloc.a); editeur.scrollIntoView?.({ from: bloc.de, to: bloc.a }, true); retour.setText('Premier bloc modifié sélectionné dans la note.'); }
+            else retour.setText('Note ouverte. La sélection est disponible seulement si son texte correspond exactement à cette version historique.');
+          } catch { if (actif()) retour.setText('Impossible d’ouvrir cette note sur cet appareil. La comparaison historique reste disponible.'); }
+        });
+      } catch (erreur) { if (actif()) zone.setText(erreur.statut === 404 ? 'Cette comparaison n’est pas disponible sur ce serveur. Mets le serveur Cordée à jour.' : expliquerErreur(erreur)); }
+    }
+    onClose() { this.ferme = true; ++this.tour; this.contentEl.empty(); }
+  };
+
+  class TableauActivite {
+    constructor(app, plugin, c, configurer) {
+      this.app = app; this.plugin = plugin; this.c = c; this.coffreId = plugin.etat.coffreId; this.jeton = plugin.etat.jeton; this.filtre = null; this.comptes = new Map();
+      c.empty();
+      const tableau = c.createEl('div', { cls: 'cordee-tableau' });
+      const entete = tableau.createEl('div', { cls: 'cordee-tableau-entete' });
+      const titres = entete.createEl('div');
+      titres.createEl('div', { text: 'CORDÉE', cls: 'cordee-surtitre' });
+      titres.createEl('h2', { text: `Coffre partagé : ${plugin.etat.nomCoffre || 'Notre coffre'}`, cls: 'cordee-titre' });
+      const commandes = entete.createEl('div', { cls: 'cordee-commandes' });
+      boutonCordee(commandes, 'Mon profil', () => new ProfilModal(app, plugin).open(), { cls: 'cordee-bouton-discret' });
+      boutonCordee(commandes, 'Inviter', () => plugin.inviter(), { label: 'Créer une invitation', cls: 'cordee-bouton-principal' });
+      if (configurer) boutonCordee(commandes, 'Configurer', configurer, { cls: 'cordee-bouton-discret' });
+      const etat = tableau.createEl('div', { cls: 'cordee-tableau-etat' });
+      const statut = etat.createEl('span', { cls: 'cordee-statut', attr: { role: 'status' } });
+      const pause = boutonCordee(etat, '', () => plugin.mettreEnPause(!plugin.etat.enPause), { label: 'Pause ou reprise', cls: 'cordee-bouton-discret' });
+      boutonCordee(etat, 'Synchroniser', () => plugin.lancer({ forcer: true }), { cls: 'cordee-bouton-discret' });
+      const attention = tableau.createEl('p', { cls: 'cordee-attention', attr: { role: 'status' } });
+      this.desabonner = plugin.abonnerStatut(() => {
+        statut.setText(plugin.titreStatut()); pause.setText(plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
+        pause.setAttribute('aria-label', plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
+        attention.setText(plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions bloquées par le garde-fou.` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
+      });
+      const section = tableau.createEl('div', { cls: 'cordee-section-titre' });
+      section.createEl('h3', { text: 'Les membres' }); this.nombre = section.createEl('span', { cls: 'cordee-details' });
+      this.membresEl = tableau.createEl('div', { cls: 'cordee-collegues', attr: { 'aria-label': 'Filtrer par membre' } });
+      const activite = tableau.createEl('div', { cls: 'cordee-section-titre' });
+      this.titreActivite = activite.createEl('h3', { text: 'Derniers changements' });
+      boutonCordee(activite, 'Actualiser', () => this.charger(), { cls: 'cordee-bouton-discret' });
+      this.information = tableau.createEl('p', { cls: 'cordee-details' });
+      this.zone = tableau.createEl('div', { cls: 'cordee-fichiers', attr: { 'aria-live': 'polite' } });
+      this.chargement = this.charger();
+    }
+    actif() { return !this.detruit && !this.plugin.arret && this.plugin.etat.coffreId === this.coffreId && this.plugin.etat.jeton === this.jeton; }
+    async charger() {
+      if (!this.actif()) return;
+      const tour = this.tour = (this.tour || 0) + 1;
+      const filtre = this.filtre;
+      this.zone.empty(); this.zone.createEl('p', { text: 'Chargement de l’activité…', cls: 'cordee-vide' });
+      try {
+        let info, ancien = false;
+        try {
+          info = await (await this.plugin.moteur.api('GET', `/api/coffres/${this.coffreId}/activite?limite=40${filtre ? '&auteur=' + encodeURIComponent(filtre) : ''}`)).json();
+          if (!Array.isArray(info.membres) || !Array.isArray(info.changements)) { const erreur = new Error('Ancien format'); erreur.statut = 404; throw erreur; }
+        } catch (erreur) {
+          if (erreur.statut !== 404) throw erreur;
+          if (!this.actif() || this.tour !== tour) return;
+          info = await (await this.plugin.moteur.api('GET', `/api/coffres/${this.coffreId}`)).json();
+          if (!this.actif() || this.tour !== tour) return;
+          const r = await (await this.plugin.moteur.api('GET', `/api/coffres/${this.coffreId}/changements?depuis=${Math.max(0, info.rev - 40)}`)).json();
+          info = { ...info, changements: r.changements.slice(-40).reverse() }; ancien = true;
+        }
+        if (!this.actif() || this.tour !== tour) return;
+        if (!filtre) this.comptes = info.changements.reduce((comptes, ch) => comptes.set(ch.auteurId, (comptes.get(ch.auteurId) || 0) + 1), new Map());
+        this.nombre.setText(`${info.membres.length} membre${info.membres.length > 1 ? 's' : ''}`);
+        this.membresEl.empty();
+        const tous = boutonCordee(this.membresEl, 'Tous', () => { this.filtre = null; return this.charger(); }, { cls: 'cordee-collegue cordee-collegue-tous', attr: { 'aria-pressed': String(!filtre) } });
+        tous.createEl('span', { text: 'Toute la cordée', cls: 'cordee-details' });
+        for (const membre of info.membres) {
+          const bouton = boutonCordee(this.membresEl, '', () => { this.filtre = membre.id; return this.charger(); }, { label: `Voir les changements de ${membre.nom}`, cls: 'cordee-collegue', attr: { 'aria-pressed': String(filtre === membre.id), 'data-membre-id': membre.id || '' } });
+          bouton.disabled = !membre.id;
+          afficherAvatar(bouton, membre.nom, membre.avatar);
+          const identite = bouton.createEl('span', { cls: 'cordee-collegue-identite' });
+          identite.createEl('strong', { text: membre.nom });
+          identite.createEl('span', { text: membre.id ? `${this.comptes.get(membre.id) || 0} changement(s) récents` : 'Membre du groupe', cls: 'cordee-details' });
+        }
+        const selection = info.membres.find((m) => m.id === filtre);
+        this.titreActivite.setText(filtre ? `Changements de ${selection?.nom || 'ce membre'}` : 'Derniers changements');
+        this.information.setText(ancien ? 'Serveur ancien : mets Cordée à jour pour filtrer tous les membres et comparer les versions.' : '40 changements maximum · Clique sur un fichier pour comparer ses versions.');
+        const changements = info.changements.filter((ch) => !filtre || ch.auteurId === filtre).slice(0, 40);
+        this.zone.empty();
+        if (!changements.length) this.zone.createEl('div', { text: filtre ? 'Aucun changement récent pour ce membre.' : 'Aucun changement partagé pour le moment.', cls: 'cordee-vide' });
+        const profils = new Map(info.membres.filter((m) => m.id).map((m) => [m.id, m]));
+        for (const ch of changements) {
+          const carte = boutonCordee(this.zone, '', () => new RevisionModal(this.app, this.plugin, ch.rev, profils.get(ch.auteurId)).open(), { label: `Comparer ${ch.chemin}, révision ${ch.rev}`, cls: 'cordee-fichier', attr: { 'data-revision': String(ch.rev) } });
+          carte.disabled = ancien || !Number.isSafeInteger(ch.rev);
+          afficherAvatar(carte, ch.auteur, profils.get(ch.auteurId)?.avatar);
+          const contenu = carte.createEl('span', { cls: 'cordee-fichier-contenu' });
+          contenu.createEl('strong', { text: ch.chemin, cls: 'cordee-fichier-chemin' });
+          contenu.createEl('span', { text: `${ch.auteur || 'Membre'} · ${ch.supprime ? 'a supprimé' : 'a modifié'} ${ch.chemin}`, cls: 'cordee-fichier-auteur' });
+          contenu.createEl('span', { text: new Date(ch.le).toLocaleString('fr-FR'), cls: 'cordee-details' });
+          carte.createEl('span', { text: ch.type === 'dossier' ? 'Dossier' : ch.supprime ? 'Supprimé' : ch.avantHash ? 'Modifié' : 'Ajouté', cls: 'cordee-type-changement' });
+          carte.createEl('span', { text: '↗', cls: 'cordee-fichier-fleche', attr: { 'aria-hidden': 'true' } });
+        }
+      } catch (erreur) { if (this.actif() && this.tour === tour) { this.zone.empty(); this.zone.createEl('p', { text: expliquerErreur(erreur), cls: 'cordee-vide' }); } }
+    }
+    detruire() { this.detruit = true; ++this.tour; this.desabonner?.(); }
+  }
+
   ActiviteModal = class extends O.Modal {
     constructor(app, plugin) { super(app); this.plugin = plugin; }
-    async onOpen() {
-      const { contentEl: c } = this;
-      this.ferme = false;
-      const tour = this.tour = (this.tour || 0) + 1;
-      const coffreId = this.plugin.etat.coffreId, jeton = this.plugin.etat.jeton;
-      const actif = () => !this.ferme && this.tour === tour && !this.plugin.arret && this.plugin.etat.coffreId === coffreId && this.plugin.etat.jeton === jeton;
-      c.empty();
-      c.createEl('h3', { text: 'Membres et activité' });
-      try {
-        const info = await (await this.plugin.moteur.api('GET', `/api/coffres/${coffreId}`)).json();
-        if (!actif()) return;
-        c.createEl('h4', { text: `${info.membres.length} membre${info.membres.length > 1 ? 's' : ''}` });
-        const membres = c.createEl('ul', { cls: 'cordee-activite' });
-        for (const membre of info.membres) {
-          const ligne = membres.createEl('li', { cls: 'cordee-personne' });
-          afficherAvatar(ligne, membre.nom, membre.avatar);
-          ligne.createEl('span', { text: `${membre.nom} · arrivé le ${new Date(membre.arrive_le).toLocaleDateString('fr-FR')}` });
-        }
-        const profils = new Map(info.membres.filter((membre) => membre.id).map((membre) => [membre.id, membre]));
-        const r = await (await this.plugin.moteur.api('GET', `/api/coffres/${coffreId}/changements?depuis=${Math.max(0, info.rev - 40)}`)).json();
-        if (!actif()) return;
-        c.createEl('h4', { text: 'Derniers changements' });
-        if (!r.changements.length) c.createEl('p', { text: 'Aucun changement partagé pour le moment.' });
-        const liste = c.createEl('ul', { cls: 'cordee-activite' });
-        for (const ch of r.changements.slice(-40).reverse()) {
-          const ligne = liste.createEl('li', { cls: 'cordee-personne' });
-          afficherAvatar(ligne, ch.auteur, profils.get(ch.auteurId)?.avatar);
-          const contenu = ligne.createEl('div');
-          contenu.createEl('span', { text: `${ch.auteur || '?'} · ${ch.supprime ? 'a supprimé' : 'a modifié'} ${ch.chemin}` });
-          contenu.createEl('div', { text: new Date(ch.le).toLocaleString('fr-FR'), cls: 'cordee-details' });
-        }
-        new O.Setting(c).addButton((b) => b.setButtonText('Actualiser').onClick(() => this.onOpen()));
-      } catch (e) { if (actif()) c.createEl('p', { text: expliquerErreur(e) }); }
-    }
-    onClose() { this.ferme = true; this.contentEl.empty(); }
+    onOpen() { this.tableau?.detruire(); this.modalEl?.classList.add('cordee-tableau-modal'); this.tableau = new TableauActivite(this.app, this.plugin, this.contentEl); return this.tableau.chargement; }
+    onClose() { this.tableau?.detruire(); this.contentEl.empty(); }
   };
 
   ReglagesCordee = class extends O.PluginSettingTab {
@@ -769,7 +1083,7 @@ if (O) {
           statut.setText(p.titreStatut());
           const derniere = e.derniereSynchro ? new Date(e.derniereSynchro).toLocaleString('fr-FR') : 'pas encore effectuée';
           chiffres.setText(`${Object.keys(e.bases).length} fichiers partagés · Dernière synchronisation : ${derniere}`);
-          attention.setText(p.derniereErreur || (p.suppressionsBloquees ? `${p.suppressionsBloquees} suppressions bloquées par le garde-fou.` : p.fichiersTropGros.size ? `${p.fichiersTropGros.size} fichier(s) dépassent la limite de 50 Mo et n’ont pas été envoyés.` : e.enPause ? 'Les prochaines synchronisations sont suspendues. Une opération déjà lancée se termine normalement.' : ''));
+          attention.setText(p.derniereErreur || p.texteBloques?.() || (p.suppressionsBloquees ? `${p.suppressionsBloquees} suppressions bloquées par le garde-fou.` : p.fichiersTropGros.size ? `${p.fichiersTropGros.size} fichier(s) dépassent la limite de 50 Mo et n’ont pas été envoyés.` : e.enPause ? 'Les prochaines synchronisations sont suspendues. Une opération déjà lancée se termine normalement.' : ''));
           attention.hidden = !attention.textContent;
         });
         new O.Setting(c).setName('Inviter un ami').setDesc('Crée un lien à lui envoyer.').addButton((b) => b.setButtonText('Créer une invitation').setCta().onClick(() => p.inviter()));
@@ -819,12 +1133,23 @@ if (O) {
   };
 
   PanneauCordee = class extends O.Modal {
-    constructor(app, plugin) { super(app); this.reglages = new ReglagesCordee(app, plugin); }
-    onOpen() { this.reglages.afficherDans(this.contentEl, () => this.onOpen()); }
-    onClose() { this.reglages.nettoyer(); this.contentEl.empty(); }
+    constructor(app, plugin) { super(app); this.plugin = plugin; this.reglages = new ReglagesCordee(app, plugin); }
+    onOpen() {
+      this.tableau?.detruire(); this.reglages.nettoyer();
+      if (!this.plugin.connecte()) { this.reglages.afficherDans(this.contentEl, () => this.onOpen()); return; }
+      this.modalEl?.classList.add('cordee-tableau-modal');
+      this.tableau = new TableauActivite(this.app, this.plugin, this.contentEl, () => this.afficherReglages());
+      return this.tableau.chargement;
+    }
+    afficherReglages() {
+      this.tableau?.detruire(); this.tableau = null;
+      this.reglages.afficherDans(this.contentEl, () => this.onOpen());
+      boutonCordee(this.contentEl, 'Retour à l’activité', () => this.onOpen(), { cls: 'cordee-bouton-discret' });
+    }
+    onClose() { this.tableau?.detruire(); this.reglages.nettoyer(); this.contentEl.empty(); }
   };
 }
 
 module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
-module.exports.interne = { fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto };
+module.exports.interne = { fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
