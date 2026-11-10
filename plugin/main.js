@@ -280,6 +280,9 @@ class Moteur {
 
 const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiersIgnores: '' };
 
+// Même symbole que brand/cordee-marque.svg, adapté au repère 100 × 100 d'Obsidian.
+const ICONE_CORDEE = '<g transform="scale(0.390625)"><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M188.29 36.97 A104 104 0 1 0 188.29 219.03 A32 32 0 1 0 166.82 189.59 A68 68 0 1 1 166.82 66.41 A32 32 0 1 0 188.29 36.97 Z M212.81 67.19 A14 14 0 1 0 184.81 67.19 A14 14 0 1 0 212.81 67.19 Z M212.81 188.81 A14 14 0 1 0 184.81 188.81 A14 14 0 1 0 212.81 188.81 Z"/></g>';
+
 function httpObsidian({ methode, url, entetes, corps, type }) {
   return O.requestUrl({ url, method: methode, headers: entetes, body: corps, contentType: type, throw: false }).then((r) => ({
     statut: r.status, json: async () => r.json, octets: async () => r.arrayBuffer,
@@ -312,6 +315,9 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.moteur = this.creerMoteur();
     this.afficher('');
     this.addSettingTab(new ReglagesCordee(this.app, this));
+    O.addIcon('cordee-logo', ICONE_CORDEE);
+    this.addRibbonIcon('cordee-logo', 'Cordée — ouvrir le partage', () => new PanneauCordee(this.app, this).open());
+    this.addCommand({ id: 'ouvrir', name: 'Ouvrir le panneau de partage', callback: () => new PanneauCordee(this.app, this).open() });
     this.addCommand({ id: 'synchroniser', name: 'Synchroniser maintenant', callback: () => this.lancer() });
     this.addCommand({ id: 'inviter', name: "Créer une invitation pour un ami", callback: () => this.inviter() });
     this.addCommand({ id: 'activite', name: 'Voir qui a modifié quoi', callback: () => new ActiviteModal(this.app, this).open() });
@@ -325,7 +331,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     });
   }
 
-  onunload() { this.arret = true; if (this.flux) this.flux.abort(); }
+  onunload() { this.arret = true; clearTimeout(this.minuteur); if (this.flux) this.flux.abort(); }
 
   connecte() { return !!(this.etat.serveur && this.etat.coffreId && this.etat.jeton); }
 
@@ -446,16 +452,19 @@ if (O) {
   var ReglagesCordee = class extends O.PluginSettingTab {
     constructor(app, plugin) { super(app, plugin); this.plugin = plugin; this.form = { serveur: '', prenom: '', invitation: '', nom: '', code: '' }; }
     display() {
-      const { containerEl: c } = this;
+      this.afficherDans(this.containerEl, () => this.display());
+    }
+    afficherDans(c, rafraichir) {
       const p = this.plugin, e = p.etat, f = this.form;
       c.empty();
+      c.createEl('h2', { text: 'Cordée' });
       if (p.connecte()) {
         c.createEl('h3', { text: `Coffre partagé : ${e.nomCoffre}` });
         c.createEl('p', { text: `Serveur ${e.serveur} · connecté en tant que ${e.prenom}` });
         new O.Setting(c).setName('Inviter un ami').setDesc('Crée un lien à lui envoyer.').addButton((b) => b.setButtonText('Créer une invitation').setCta().onClick(() => p.inviter()));
         new O.Setting(c).setName('Synchroniser').setDesc('Se fait seul à chaque modification ; ce bouton force une synchro.').addButton((b) => b.setButtonText('Synchroniser').onClick(() => p.lancer()));
         new O.Setting(c).setName('Dossiers non partagés').setDesc('Séparés par des virgules, par exemple : Brouillons, Perso').addText((t) => t.setValue(e.dossiersIgnores).onChange(async (v) => { e.dossiersIgnores = v; await p.saveData(e); }));
-        new O.Setting(c).setName('Quitter ce coffre').setDesc('Tes fichiers restent sur ton ordinateur ; ils ne se synchronisent plus.').addButton((b) => b.setButtonText('Quitter').setWarning().onClick(async () => { await p.quitter(); this.display(); }));
+        new O.Setting(c).setName('Quitter ce coffre').setDesc('Tes fichiers restent sur ton ordinateur ; ils ne se synchronisent plus.').addButton((b) => b.setButtonText('Quitter').setWarning().onClick(async () => { await p.quitter(); rafraichir(); }));
         return;
       }
       c.createEl('h3', { text: 'Rejoindre un coffre' });
@@ -464,7 +473,7 @@ if (O) {
       new O.Setting(c).addButton((b) => b.setButtonText('Rejoindre').setCta().onClick(async () => {
         const inv = lireInvitation(f.invitation, f.serveur);
         if (!inv.serveur) { new O.Notice("Colle le lien complet, ou indique l'adresse du serveur plus bas."); return; }
-        try { await p.rejoindreOuCreer('/api/rejoindre', { code: inv.code, prenom: f.prenom }, inv.serveur); this.display(); }
+        try { await p.rejoindreOuCreer('/api/rejoindre', { code: inv.code, prenom: f.prenom }, inv.serveur); rafraichir(); }
         catch (err) { new O.Notice('Cordée : ' + err.message); }
       }));
       c.createEl('h3', { text: 'Ou créer un coffre partagé' });
@@ -474,10 +483,16 @@ if (O) {
       new O.Setting(c).setName('Ton prénom').addText((t) => t.setValue(f.prenom).onChange((v) => { f.prenom = v; }));
       new O.Setting(c).setName('Code de création').addText((t) => { t.inputEl.type = 'password'; t.onChange((v) => { f.code = v; }); });
       new O.Setting(c).addButton((b) => b.setButtonText('Créer et partager').setCta().onClick(async () => {
-        try { await p.rejoindreOuCreer('/api/coffres', { nom: f.nom, prenom: f.prenom, codeCreation: f.code }, f.serveur); this.display(); }
+        try { await p.rejoindreOuCreer('/api/coffres', { nom: f.nom, prenom: f.prenom, codeCreation: f.code }, f.serveur); rafraichir(); }
         catch (err) { new O.Notice('Cordée : ' + err.message); }
       }));
     }
+  };
+
+  var PanneauCordee = class extends O.Modal {
+    constructor(app, plugin) { super(app); this.reglages = new ReglagesCordee(app, plugin); }
+    onOpen() { this.reglages.afficherDans(this.contentEl, () => this.onOpen()); }
+    onClose() { this.contentEl.empty(); }
   };
 }
 

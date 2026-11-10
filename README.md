@@ -64,6 +64,8 @@ En attendant sa publication dans le catalogue d'Obsidian :
 2. Copies-y `plugin/manifest.json` et `plugin/main.js`.
 3. Obsidian → Réglages → Extensions communautaires → active **Cordée**.
 
+Le logo Cordée apparaît dans la barre de gauche. Clique dessus pour ouvrir le panneau de partage, créer une invitation ou synchroniser. Le même panneau reste accessible dans les réglages et par la commande « Cordée : Ouvrir le panneau de partage ».
+
 Ensuite, dans les réglages de Cordée :
 - **Pour créer un coffre partagé** : adresse du serveur, nom du coffre, ton prénom et le code de création. Tout le coffre est envoyé.
 - **Pour rejoindre** : colle le lien d'invitation et ton prénom. Le mieux est de partir d'un coffre vide.

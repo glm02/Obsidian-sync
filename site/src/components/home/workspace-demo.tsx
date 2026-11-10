@@ -27,7 +27,7 @@ export function WorkspaceDemo() {
     <Tabs defaultValue="notes">
       <div className="demo-toolbar">
         <div className="flex items-center gap-3"><BrandLogo brand="obsidian" className="size-4" /><span className="text-xs font-medium">Notre coffre</span><span className="demo-label">Démo</span></div>
-        <TabsList aria-label="Explorer la démonstration"><TabsTrigger value="notes">Notes</TabsTrigger><TabsTrigger value="fusion">Fusion</TabsTrigger><TabsTrigger value="activite">Activité</TabsTrigger></TabsList>
+        <div className="demo-tabs"><TabsList aria-label="Explorer la démonstration"><TabsTrigger value="notes">Notes</TabsTrigger><TabsTrigger value="fusion">Fusion</TabsTrigger><TabsTrigger value="activite">Activité</TabsTrigger></TabsList></div>
         <div className="demo-invite"><DemoInvite /></div>
       </div>
 
