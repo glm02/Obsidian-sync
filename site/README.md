@@ -26,7 +26,7 @@ Importer le dépôt, choisir **Root Directory = site** et le preset **Next.js**.
 
 Le serveur Cordée, SQLite et ses fichiers doivent être hébergés séparément sur un VPS. Configurer `CORDEE_PAGE_INVITATION=https://cordee.vercel.app/rejoindre` dans l’environnement du serveur, en adaptant l’adresse au déploiement Vercel.
 
-Pages : `/` (présentation et rôles), `/deployer` (hébergement), `/guide` (parcours invité en quatre maquettes), `/rejoindre` (invitation locale au navigateur). Le symbole provisoire est isolé dans `src/components/logo.tsx` ; le favicon est dans `src/app/icon.svg`.
+Pages : `/` (présentation et rôles), `/deployer` (hébergement), `/guide` (parcours invité en quatre maquettes), `/rejoindre` (invitation locale au navigateur). Le logo est intégré par `src/components/logo.tsx` depuis `public/brand/cordee-logo.svg` ; le favicon est dans `src/app/icon.svg`. Les sources et variantes de la marque se trouvent dans `../brand/`.
 
 ## Invitations
 

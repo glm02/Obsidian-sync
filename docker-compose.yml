@@ -5,6 +5,7 @@ services:
     restart: unless-stopped
     environment:
       CORDEE_URL_PUBLIQUE: https://${CORDEE_DOMAINE}
+      CORDEE_PAGE_INVITATION: ${CORDEE_PAGE_INVITATION:-}
       CORDEE_TAILLE_MAX_MO: ${CORDEE_TAILLE_MAX_MO:-50}
     volumes:
       - cordee-donnees:/donnees

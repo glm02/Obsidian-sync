@@ -9,6 +9,7 @@ services:
     restart: unless-stopped
     environment:
       CORDEE_URL_PUBLIQUE: https://${CORDEE_DOMAINE}
+      CORDEE_PAGE_INVITATION: ${CORDEE_PAGE_INVITATION:-}
       CORDEE_TAILLE_MAX_MO: ${CORDEE_TAILLE_MAX_MO:-50}
       # Le proxy écrase X-Real-IP : le limiteur d'essais compte par vraie adresse.
       CORDEE_DERRIERE_PROXY: "1"

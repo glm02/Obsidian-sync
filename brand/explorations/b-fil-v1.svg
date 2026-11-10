@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="#111111" role="img" aria-labelledby="titre">
+  <title id="titre">B — Le fil commun</title>
+  <path d="M64 56 H164 A44 44 0 0 1 164 144 H92 A36 36 0 0 0 92 216 H192" fill="none" stroke="#111111" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="64" cy="56" r="22"/><circle cx="128" cy="144" r="22"/><circle cx="192" cy="216" r="22"/>
+</svg>
