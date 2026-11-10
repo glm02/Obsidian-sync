@@ -3,6 +3,7 @@
 import { useRef } from "react";
 import Link from "next/link";
 import { ChevronDown } from "lucide-react";
+import { BrandLogo } from "@/components/brand-logo";
 
 export function MobileNav({ repository }: { repository: string }) {
   const menu = useRef<HTMLDetailsElement>(null);
@@ -15,7 +16,7 @@ export function MobileNav({ repository }: { repository: string }) {
       <Link prefetch={false} href="/" className="rounded-md px-4 py-3 hover:bg-secondary">Accueil</Link>
       <Link prefetch={false} href="/deployer" className="rounded-md px-4 py-3 hover:bg-secondary">Déployer</Link>
       <Link prefetch={false} href="/guide" className="rounded-md px-4 py-3 hover:bg-secondary">Guide</Link>
-      <a href={repository} className="rounded-md px-4 py-3 hover:bg-secondary">GitHub</a>
+      <a href={repository} className="flex items-center gap-2 rounded-md px-4 py-3 hover:bg-secondary"><BrandLogo brand="github" className="size-4" />GitHub</a>
     </nav>
   </details>;
 }

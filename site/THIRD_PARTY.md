@@ -1,6 +1,8 @@
 # Sources des composants
 
-- Le bouton dans `src/components/ui/button.tsx` est adapté de shadcn/ui (licence MIT) : https://ui.shadcn.com/docs/components/button. Les dépendances Radix Slot, class-variance-authority, clsx et tailwind-merge servent ce composant.
+- Les composants Button, Tabs, Accordion, Dialog et Card dans `src/components/ui/` sont adaptés de shadcn/ui (licence MIT) : https://ui.shadcn.com. Les primitives Radix assurent le clavier, les rôles ARIA et la gestion du focus. Les fichiers du registre officiel ont été lus avant adaptation.
+- Les logos Obsidian, GitHub, Docker et Vercel dans `public/logos/` proviennent du projet Simple Icons (CC0) : https://github.com/simple-icons/simple-icons. Ils désignent les outils utilisés, sans revendiquer de partenariat. Ils sont servis localement, sans appel à un fournisseur de logos. Le traitement monochrome d’Obsidian suit sa variante à une couleur : https://obsidian.md/brand.
+- Le logo Cordée de `public/brand/` et le favicon sont les fichiers vectoriels créés pour le projet dans `brand/`.
 - Les styles sont écrits pour Cordée à partir des consignes visuelles fournies, sans copier de code des dépôts kargulstudio ou de Pin UI.
 - Les icônes proviennent de lucide-react (licence ISC). Les polices Geist sont intégrées au build avec `next/font/google` : le navigateur ne contacte pas Google Fonts.
 
