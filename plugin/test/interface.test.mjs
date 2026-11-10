@@ -520,3 +520,63 @@ test("l'erreur affichée distingue une vraie coupure de connexion d'un problème
   assert.match(local, /Le dossier existe déjà/);
   assert.doesNotMatch(local, /Vérifie ta connexion/);
 });
+
+test('un dossier supprimé par un ami disparaît même s’il ne contient que des fichiers parasites du système', async () => {
+  const { plugin } = charger({});
+  const retires = [];
+  let contenu = { files: ['Cours/Thumbs.db', 'Cours/.DS_Store'], folders: [] };
+  plugin.app.vault.adapter = {
+    list: async () => contenu,
+    remove: async (chemin) => { retires.push(chemin); },
+    rmdir: async (chemin, recursif) => { assert.equal(recursif, false); retires.push('dossier:' + chemin); },
+    exists: async () => true,
+  };
+  await plugin.onload();
+  assert.equal(await plugin.moteur.fichiers.supprimerDossierVide('Cours'), true);
+  assert.deepEqual(retires, ['Cours/Thumbs.db', 'Cours/.DS_Store', 'dossier:Cours']);
+  // Un vrai fichier, même caché, protège le dossier.
+  retires.length = 0;
+  contenu = { files: ['Cours/Thumbs.db', 'Cours/.secret'], folders: [] };
+  assert.equal(await plugin.moteur.fichiers.supprimerDossierVide('Cours'), false);
+  assert.deepEqual(retires, []);
+});
+
+test('le garde-fou prévient une seule fois et la confirmation relance la synchro', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  let confirmations = 0;
+  plugin.moteur.autoriserSuppressions = () => { confirmations++; };
+  plugin.moteur.suppressionsEnAttente = () => 30;
+  plugin.lancer = async () => {};
+  plugin.moteur.signaler('garde-fou', 30); rendu.notice = '';
+  plugin.moteur.signaler('garde-fou', 30);
+  assert.equal(rendu.notice, '', 'le même message n’est pas répété à chaque synchro');
+  assert.equal(plugin.titreStatut(), 'fichiers à vérifier');
+  await plugin.confirmerSuppressions();
+  assert.equal(confirmations, 1);
+});
+
+test('la version annoncée au serveur est celle du manifeste, et la comparaison est numérique', () => {
+  const { interne } = charger({});
+  const manifeste = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+  assert.equal(interne.VERSION, manifeste.version);
+  assert.equal(interne.comparerVersions('0.1.4', '0.1.5'), -1);
+  assert.equal(interne.comparerVersions('0.1.10', '0.1.5'), 1);
+  assert.equal(interne.comparerVersions('0.1.5', '0.1.5'), 0);
+});
+
+test('un ami qui n’a pas la dernière version est signalé une seule fois, avec son nom', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  const info = { moiId: 'moi', membres: [{ id: 'moi', nom: 'Moi', version: '0.1.5' }, { id: 'a', nom: 'Bruno', version: null }, { id: 'b', nom: 'Chloé', version: '0.1.5' }] };
+  plugin.moteur.api = async () => ({ json: async () => info });
+  await plugin.verifierVersions();
+  assert.match(rendu.notice, /Bruno/);
+  assert.doesNotMatch(rendu.notice, /Chloé|Moi/);
+  rendu.notice = ''; plugin.derniereVerifVersions = 0;
+  await plugin.verifierVersions();
+  assert.equal(rendu.notice, '', 'pas de répétition tant que la situation ne change pas');
+  info.membres[1].version = '0.1.5'; plugin.derniereVerifVersions = 0;
+  await plugin.verifierVersions();
+  assert.equal(rendu.notice, '');
+});

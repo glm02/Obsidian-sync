@@ -1,5 +1,12 @@
 # Nouveautés
 
+## 0.1.6
+
+- **Supprimer un dossier le supprime aussi chez les amis**, sous-dossiers compris, que ce soit depuis Obsidian ou depuis l’explorateur de fichiers du système. Les fichiers des dossiers retirés vont dans la corbeille du coffre chez les autres : rien n’est perdu.
+- **Suppression massive confirmable.** Quand plus de 20 éléments (et plus de la moitié du coffre) disparaissent d’un coup, Cordée ne supprime toujours rien d’office, mais propose maintenant de confirmer : bouton dans l’alerte, commande « Confirmer les suppressions en attente » et panneau. La confirmation ne vaut que pour une synchronisation. L’alerte n’est plus répétée à chaque synchro.
+- **Cordée dit qui n’est pas à jour.** Chaque extension annonce sa version au serveur ; si un ami a une version d’avant les dossiers, une alerte le nomme : chez lui les fichiers partent mais les dossiers restent. Seul le numéro de version est transmis.
+- Un dossier supprimé par un ami disparaît aussi chez toi quand il ne contient que des fichiers parasites du système (`Thumbs.db`, `.DS_Store`, `desktop.ini`) ; un vrai fichier, même caché, le protège toujours.
+
 ## 0.1.5
 
 - **Un fichier qui ne peut pas être écrit ne bloque plus la synchronisation.** Avant, un seul changement impossible à appliquer (par exemple un dossier que l’ami avait renommé en changeant seulement les majuscules, sur Windows ou macOS) arrêtait tout : plus rien n’arrivait et plus rien n’était envoyé, avec le message trompeur « vérifie ta connexion ». Le fichier est maintenant mis de côté, réessayé à chaque synchro, et signalé par son nom ; le reste continue.

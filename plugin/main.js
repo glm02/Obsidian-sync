@@ -159,6 +159,14 @@ class Moteur {
     this.encore = false;
   }
 
+  /**
+   * Le garde-fou retient une disparition massive (plus de 20 éléments et plus de la moitié du coffre) : c'est
+   * plus souvent un accident qu'un choix. Quand c'est voulu, l'utilisateur la confirme : la suppression part
+   * alors à la prochaine synchro, une seule fois, et se propage chez tous les membres.
+   */
+  suppressionsEnAttente() { return (this.suppressionsFichiers || 0) + (this.suppressionsDossiers || 0); }
+  autoriserSuppressions() { this.suppressionsAutorisees = true; if (this.enCours) this.encore = true; }
+
   url(p) { return this.etat.serveur.replace(/\/$/, '') + p; }
   racine() { return `/api/coffres/${this.etat.coffreId}`; }
 
@@ -167,7 +175,7 @@ class Moteur {
     try {
       r = await this.http({
         methode, url: this.url(p),
-        entetes: { Authorization: 'Bearer ' + this.etat.jeton },
+        entetes: { Authorization: 'Bearer ' + this.etat.jeton, 'X-Cordee-Version': VERSION },
         corps: corps === undefined ? undefined : JSON.stringify(corps),
         type: corps === undefined ? undefined : 'application/json',
       });
@@ -203,7 +211,7 @@ class Moteur {
 
   async envoyerBlob(hash, buf) {
     let r;
-    try { r = await this.http({ methode: 'PUT', url: this.url(`${this.racine()}/blobs/${hash}`), entetes: { Authorization: 'Bearer ' + this.etat.jeton }, corps: buf, type: 'application/octet-stream' }); }
+    try { r = await this.http({ methode: 'PUT', url: this.url(`${this.racine()}/blobs/${hash}`), entetes: { Authorization: 'Bearer ' + this.etat.jeton, 'X-Cordee-Version': VERSION }, corps: buf, type: 'application/octet-stream' }); }
     catch (e) { e.reseau = true; throw e; }
     if (r.statut >= 400) { const erreur = new Error(`Envoi refusé (${r.statut})`); erreur.statut = r.statut; throw erreur; }
   }
@@ -226,6 +234,7 @@ class Moteur {
           if (refus > 0) { await this.recuperer(); await this.envoyer(); }
           await this.sauver();
         } while (this.encore);
+        this.suppressionsAutorisees = false; // la confirmation ne vaut que pour cette synchro
         this.signaler('ok');
       } catch (e) {
         this.signaler('erreur', e);
@@ -349,7 +358,9 @@ class Moteur {
     const disparus = Object.keys(this.etat.bases).filter((p) => !presents.has(p) && !this.ignorer(p));
     const total = Object.keys(this.etat.bases).length;
     // Garde-fou : si la moitié du coffre disparaît d'un coup, c'est plus probablement un accident qu'un choix.
-    if (disparus.length > 20 && disparus.length > total / 2) {
+    this.suppressionsFichiers = 0;
+    if (!this.suppressionsAutorisees && disparus.length > 20 && disparus.length > total / 2) {
+      this.suppressionsFichiers = disparus.length;
       this.signaler('garde-fou', disparus.length);
       return refus;
     }
@@ -366,7 +377,9 @@ class Moteur {
     const presents = new Set(this.fichiers.listerDossiers().filter((p) => !this.ignorer(p)));
     const connus = Object.keys(this.etat.dossiers).filter((p) => !this.ignorer(p));
     const chemins = supprimer ? connus.filter((p) => !presents.has(p)) : [...presents].filter((p) => !Object.hasOwn(this.etat.dossiers, p));
-    if (supprimer && chemins.length > 20 && chemins.length > connus.length / 2) {
+    if (supprimer) this.suppressionsDossiers = 0;
+    if (supprimer && !this.suppressionsAutorisees && chemins.length > 20 && chemins.length > connus.length / 2) {
+      this.suppressionsDossiers = chemins.length;
       this.signaler('garde-fou', chemins.length, 'dossiers');
       return 0;
     }
@@ -390,6 +403,17 @@ class Moteur {
 }
 
 /* ---------- Intégration Obsidian ---------- */
+
+// Doit rester égale à la version de manifest.json (un test le vérifie).
+const VERSION = '0.1.6';
+// Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
+const VERSION_DOSSIERS = '0.1.5';
+
+function comparerVersions(a, b) {
+  const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0) ? -1 : 1;
+  return 0;
+}
 
 const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiers: {}, enAttente: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null };
 
@@ -528,7 +552,11 @@ function fichiersObsidian(app) {
         // Le cache Obsidian ne voit pas tous les fichiers cachés. La vérification
         // physique et rmdir(false) empêchent toute suppression récursive, même en course.
         const contenu = await vault.adapter.list(p);
-        if (contenu.files.length || contenu.folders.length) return false;
+        // Les fichiers que le système crée tout seul (miniatures, icônes de dossier) ne comptent pas : sans cela,
+        // un dossier supprimé chez l'ami resterait chez toi, vide mais bien là, à cause d'un « Thumbs.db ».
+        const parasites = contenu.files.filter((f) => /(^|\/)(\.DS_Store|Thumbs\.db|desktop\.ini)$/i.test(f));
+        if (contenu.files.length > parasites.length || contenu.folders.length) return false;
+        for (const f of parasites) await vault.adapter.remove(f);
         await vault.adapter.rmdir(p, false);
         dossiersAbsents.add(p);
         return true;
@@ -576,6 +604,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.addRibbonIcon('cordee-logo', 'Cordée — ouvrir le partage', () => new PanneauCordee(this.app, this).open());
     this.addCommand({ id: 'ouvrir', name: 'Ouvrir le panneau de partage', callback: () => new PanneauCordee(this.app, this).open() });
     this.addCommand({ id: 'synchroniser', name: 'Synchroniser maintenant', callback: () => this.lancer({ forcer: true }) });
+    this.addCommand({ id: 'confirmer-suppressions', name: 'Confirmer les suppressions en attente (aussi chez les amis)', callback: () => this.confirmerSuppressions() });
     this.addCommand({ id: 'pause', name: 'Mettre en pause ou reprendre la synchronisation', callback: () => this.mettreEnPause(!this.etat.enPause) });
     this.addCommand({ id: 'inviter', name: "Créer une invitation pour un ami", callback: () => this.inviter() });
     this.addCommand({ id: 'activite', name: 'Voir qui a modifié quoi', callback: () => new ActiviteModal(this.app, this).open() });
@@ -620,7 +649,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
         else if (quoi === 'ok') this.phase = 'ok';
         else if (quoi === 'erreur') this.signalerErreur(a, 'synchro');
         else if (quoi === 'conflit') new O.Notice(`Cordée : ${a} modifié aussi par ${b || 'un ami'}. Les deux versions sont gardées, vérifie la note.`, 10000);
-        else if (quoi === 'garde-fou') { this.suppressionsBloquees = a; new O.Notice(`Cordée : ${a} ${b === 'dossiers' ? 'dossiers' : 'fichiers'} ont disparu d'un coup. Rien n'a été supprimé sur le serveur. Vérifie ton coffre.`, 0); }
+        else if (quoi === 'garde-fou') this.annoncerGardeFou(a, b);
         else if (quoi === 'dossiers-indisponibles') new O.Notice('Cordée : ce serveur doit être mis à jour pour partager les dossiers vides. Les notes continuent à se synchroniser.', 10000);
         else if (quoi === 'dossier-conserve') new O.Notice(`Cordée : ${a} a été conservé car il contient encore des fichiers locaux.`, 10000);
         else if (quoi === 'dossier-en-attente') this.dossiersEnAttente.add(a);
@@ -642,6 +671,45 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   }
 
   /** Fichiers d'un ami qui n'ont pas pu être écrits ici : le reste se synchronise quand même. */
+  /**
+   * Plus de 20 éléments (et plus de la moitié du coffre) ont disparu d'un coup : par prudence rien n'est supprimé
+   * chez les autres. Si c'est voulu, un bouton, une commande et le panneau permettent de le confirmer.
+   */
+  annoncerGardeFou(n, quoi) {
+    this.suppressionsBloquees = n;
+    const cle = `${quoi || 'fichiers'}:${n}`;
+    if (cle === this.dernierGardeFou) return;
+    this.dernierGardeFou = cle;
+    const notice = new O.Notice(`Cordée : ${n} ${quoi === 'dossiers' ? 'dossiers' : 'fichiers'} ont disparu d’un coup de ce coffre. Par prudence, rien n’a été supprimé chez les autres. Si c’est voulu, confirme ci-dessous ; sinon restaure-les (corbeille du coffre) et rien ne sera supprimé.`, 0);
+    const bouton = notice.noticeEl?.createEl?.('button', { text: 'Supprimer aussi chez les autres' });
+    if (bouton) bouton.onclick = () => { notice.hide?.(); this.confirmerSuppressions(); };
+  }
+
+  async confirmerSuppressions() {
+    if (!this.connecte() || !this.moteur.suppressionsEnAttente()) { new O.Notice('Aucune suppression en attente de confirmation.'); return; }
+    this.moteur.autoriserSuppressions();
+    this.dernierGardeFou = '';
+    await this.lancer({ forcer: true });
+  }
+
+  /**
+   * Avant la 0.1.5, l'extension ne sait ni créer ni supprimer de dossiers : un ami qui l'a gardée voit les fichiers
+   * disparaître mais pas le dossier vide. On le dit une fois, avec les noms, plutôt que de laisser croire à un bug.
+   */
+  async verifierVersions() {
+    if (!this.connecte() || this.arret) return;
+    const t = Date.now();
+    if (this.derniereVerifVersions && t - this.derniereVerifVersions < 30 * 60_000) return;
+    this.derniereVerifVersions = t;
+    try {
+      const info = await (await this.moteur.api('GET', `/api/coffres/${this.etat.coffreId}`)).json();
+      const retard = (info.membres || []).filter((m) => m.id !== info.moiId && (!m.version || comparerVersions(m.version, VERSION_DOSSIERS) < 0)).map((m) => m.nom);
+      const cle = retard.join('|');
+      if (retard.length && cle !== this.dernierRetardVersions) new O.Notice(`Cordée : à mettre à jour chez ${retard.join(', ')} (version d’avant les dossiers, ou inconnue). Tant que ce n’est pas fait, les fichiers arrivent mais les dossiers créés ou supprimés ici ne se mettent pas à jour chez eux.`, 20000);
+      this.dernierRetardVersions = cle;
+    } catch { /* simple information : ne doit jamais gêner la synchronisation */ }
+  }
+
   texteBloques() {
     if (!this.fichiersBloques.size) return '';
     const [premier, raison] = [...this.fichiersBloques.entries()][0];
@@ -696,6 +764,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     const resume = this.texteBloques();
     if (resume && resume !== this.dernierResumeBloques) new O.Notice('Cordée : ' + resume, 15000);
     this.dernierResumeBloques = resume;
+    if (this.phase === 'ok') this.verifierVersions();
     if (this.phase === 'ok') {
       this.etat.derniereSynchro = Date.now();
       try { await this.saveData(this.etat); }
@@ -979,7 +1048,7 @@ if (O) {
       this.desabonner = plugin.abonnerStatut(() => {
         statut.setText(plugin.titreStatut()); pause.setText(plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
         pause.setAttribute('aria-label', plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
-        attention.setText(plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions bloquées par le garde-fou.` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
+        attention.setText(plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
       });
       const section = tableau.createEl('div', { cls: 'cordee-section-titre' });
       section.createEl('h3', { text: 'Les membres' }); this.nombre = section.createEl('span', { cls: 'cordee-details' });
@@ -1083,7 +1152,7 @@ if (O) {
           statut.setText(p.titreStatut());
           const derniere = e.derniereSynchro ? new Date(e.derniereSynchro).toLocaleString('fr-FR') : 'pas encore effectuée';
           chiffres.setText(`${Object.keys(e.bases).length} fichiers partagés · Dernière synchronisation : ${derniere}`);
-          attention.setText(p.derniereErreur || p.texteBloques?.() || (p.suppressionsBloquees ? `${p.suppressionsBloquees} suppressions bloquées par le garde-fou.` : p.fichiersTropGros.size ? `${p.fichiersTropGros.size} fichier(s) dépassent la limite de 50 Mo et n’ont pas été envoyés.` : e.enPause ? 'Les prochaines synchronisations sont suspendues. Une opération déjà lancée se termine normalement.' : ''));
+          attention.setText(p.derniereErreur || p.texteBloques?.() || (p.suppressionsBloquees ? `${p.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : p.fichiersTropGros.size ? `${p.fichiersTropGros.size} fichier(s) dépassent la limite de 50 Mo et n’ont pas été envoyés.` : e.enPause ? 'Les prochaines synchronisations sont suspendues. Une opération déjà lancée se termine normalement.' : ''));
           attention.hidden = !attention.textContent;
         });
         new O.Setting(c).setName('Inviter un ami').setDesc('Crée un lien à lui envoyer.').addButton((b) => b.setButtonText('Créer une invitation').setCta().onClick(() => p.inviter()));
@@ -1152,4 +1221,4 @@ if (O) {
 
 module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
-module.exports.interne = { fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
+module.exports.interne = { VERSION, comparerVersions, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };

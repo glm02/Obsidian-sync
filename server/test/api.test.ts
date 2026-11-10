@@ -439,3 +439,22 @@ test('la migration des anciens membres préserve les jetons et les photos après
     fs.rmSync(dossier, { recursive: true, force: true });
   }
 });
+
+test("le serveur retient la version de l'extension de chaque membre, sans accepter n'importe quoi", async () => {
+  const s = await demarrer();
+  try {
+    const c = (await s.appel('POST', '/api/coffres', { nom: 'V', prenom: 'Alice', codeCreation: CODE })).json;
+    const code = (await s.appel('POST', `/api/coffres/${c.coffreId}/invitations`, {}, c.jeton)).json.code;
+    const b = (await s.appel('POST', '/api/rejoindre', { code, prenom: 'Bruno' })).json;
+    const avec = (jeton: string, version: string) => fetch(s.url + `/api/coffres/${c.coffreId}`, { headers: { Authorization: 'Bearer ' + jeton, 'X-Cordee-Version': version } });
+    await avec(c.jeton, '0.1.5');
+    await avec(b.jeton, '<script>alert(1)</script>');
+    const info = (await s.appel('GET', `/api/coffres/${c.coffreId}`, undefined, c.jeton)).json;
+    const parNom = Object.fromEntries(info.membres.map((m: { nom: string; version: string | null }) => [m.nom, m.version]));
+    assert.equal(parNom.Alice, '0.1.5');
+    assert.equal(parNom.Bruno, null, 'une extension ancienne ou une valeur invalide reste « inconnue »');
+    await avec(b.jeton, '0.1.4');
+    const apres = (await s.appel('GET', `/api/coffres/${c.coffreId}`, undefined, c.jeton)).json;
+    assert.equal(apres.membres.find((m: { nom: string }) => m.nom === 'Bruno').version, '0.1.4');
+  } finally { await s.arreter(); }
+});

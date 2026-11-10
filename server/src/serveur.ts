@@ -105,6 +105,7 @@ export function creerServeur(opts: Options) {
   // Migration additive : les coffres et les jetons des installations existantes restent valables.
   const colonnesMembres = db.prepare('PRAGMA table_info(membres)').all() as Array<{ name: string }>;
   if (!colonnesMembres.some((c) => c.name === 'avatar')) db.exec('ALTER TABLE membres ADD COLUMN avatar TEXT');
+  if (!colonnesMembres.some((c) => c.name === 'version')) db.exec('ALTER TABLE membres ADD COLUMN version TEXT');
   const colonnesChangements = db.prepare('PRAGMA table_info(changements)').all() as Array<{ name: string }>;
   if (!colonnesChangements.some((c) => c.name === 'type')) db.exec("ALTER TABLE changements ADD COLUMN type TEXT NOT NULL DEFAULT 'fichier'");
   db.exec(`CREATE INDEX IF NOT EXISTS changements_chemin_type_rev ON changements (coffre_id, chemin, type, rev);
@@ -119,7 +120,7 @@ export function creerServeur(opts: Options) {
   const exposerChangement = (c: ChangementStocke) => ({ ...c, supprime: c.supprime === 1 });
 
   function membresDuCoffre(coffreId: string) {
-    return db.prepare('SELECT id, nom, avatar, cree_le AS arrive_le FROM membres WHERE coffre_id = ? AND revoque = 0 ORDER BY cree_le').all(coffreId);
+    return db.prepare('SELECT id, nom, avatar, version, cree_le AS arrive_le FROM membres WHERE coffre_id = ? AND revoque = 0 ORDER BY cree_le').all(coffreId);
   }
 
   function fichierBloquant(coffreId: string, chemin: string, inclureLui = true) {
@@ -160,9 +161,16 @@ export function creerServeur(opts: Options) {
     const auth = req.headers.authorization || '';
     const jeton = auth.startsWith('Bearer ') ? auth.slice(7) : '';
     if (!jeton) throw new ErreurHttp(401, 'Jeton manquant.');
-    const m = db.prepare('SELECT id, nom, coffre_id FROM membres WHERE jeton_hash = ? AND revoque = 0').get(sha256(jeton)) as
-      | { id: string; nom: string; coffre_id: string } | undefined;
+    const m = db.prepare('SELECT id, nom, coffre_id, version FROM membres WHERE jeton_hash = ? AND revoque = 0').get(sha256(jeton)) as
+      | { id: string; nom: string; coffre_id: string; version: string | null } | undefined;
     if (!m || m.coffre_id !== coffreId) throw new ErreurHttp(403, "Tu n'as pas accès à ce coffre.");
+    // Version de l'extension de ce membre : permet de repérer, depuis le coffre, un ami dont l'extension est trop ancienne
+    // (avant la 0.1.5, elle ne sait pas créer ni supprimer de dossiers). Jamais un contenu : seulement « 0.1.5 ».
+    const version = String(req.headers['x-cordee-version'] || '');
+    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(version) && version !== m.version) {
+      db.prepare('UPDATE membres SET version = ? WHERE id = ?').run(version, m.id);
+      m.version = version;
+    }
     return m;
   }
 

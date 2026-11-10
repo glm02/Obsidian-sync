@@ -191,3 +191,83 @@ test("une vraie panne du serveur arrête toujours la synchro, avec un message de
   assert.equal(erreurs.length, 1);
   assert.equal(erreurs[0].reseau, true);
 });
+
+async function deuxCoffres(initialA: Record<string, string> = {}) {
+  const srv = await demarrer();
+  const cree = (await srv.appel('POST', '/api/coffres', { nom: 'Groupe', prenom: 'Alice', codeCreation: CODE })).json;
+  const code = (await srv.appel('POST', `/api/coffres/${cree.coffreId}/invitations`, {}, cree.jeton)).json.code;
+  const bruno = (await srv.appel('POST', '/api/rejoindre', { code, prenom: 'Bruno' })).json;
+  const cA = coffreMemoire(initialA);
+  const cB = coffreMemoire();
+  const A = moteur(srv.url, cree.coffreId, cree.jeton, 'Alice', cA);
+  const B = moteur(srv.url, cree.coffreId, bruno.jeton, 'Bruno', cB);
+  const sync = async () => { await A.m.synchroniser(); await B.m.synchroniser(); await A.m.synchroniser(); };
+  return { srv, cA, cB, A, B, sync };
+}
+
+test("supprimer un dossier entier chez l'un le supprime chez l'autre, sous-dossiers compris", async () => {
+  const { srv, cA, cB, sync } = await deuxCoffres({
+    'Cours/TD/a.md': 'a', 'Cours/TD/Corrections/b.pdf': 'b', 'Cours/TD/Corrections/Brouillons/c.md': 'c', 'Cours/Notes/n.md': 'n',
+  });
+  try {
+    cA.creerDossier('Cours/Vide');
+    await sync();
+    assert.deepEqual(cB.chemins(), ['Cours/Notes/n.md', 'Cours/TD/Corrections/Brouillons/c.md', 'Cours/TD/Corrections/b.pdf', 'Cours/TD/a.md']);
+    assert.ok(cB.dossiers().includes('Cours/Vide'), 'le dossier vide arrive aussi');
+
+    // Alice supprime le dossier depuis l'explorateur de fichiers : tout son contenu disparaît d'un coup.
+    cA.retirerArbre('Cours/TD');
+    await sync();
+    assert.deepEqual(cB.chemins(), ['Cours/Notes/n.md']);
+    assert.deepEqual(cB.dossiers().filter((d) => d.startsWith('Cours/TD')), [], 'aucun dossier fantôme chez Bruno');
+    assert.ok(cB.dossiers().includes('Cours/Vide') && cB.dossiers().includes('Cours/Notes'), 'les autres dossiers restent');
+
+    // Et dans l'autre sens : Bruno supprime un dossier vide, Alice le perd aussi.
+    cB.retirerArbre('Cours/Vide');
+    await sync();
+    assert.ok(!cA.dossiers().includes('Cours/Vide'));
+  } finally { await srv.arreter(); }
+});
+
+test("un gros dossier supprimé volontairement part chez l'autre après confirmation, pas avant", async () => {
+  const notes: Record<string, string> = {};
+  for (let i = 0; i < 30; i++) notes[`Gros/n${i}.md`] = `note ${i}`;
+  notes['Petit/p.md'] = 'p';
+  const { srv, cA, cB, A, B, sync } = await deuxCoffres(notes);
+  try {
+    await sync();
+    assert.equal(cB.chemins().length, 31);
+    cA.retirerArbre('Gros');
+    await A.m.synchroniser();
+    await B.m.synchroniser();
+    // Le garde-fou protège d'un accident : rien n'a bougé chez Bruno, et Alice est prévenue.
+    assert.ok(A.signaux.includes('garde-fou'));
+    assert.equal(cB.chemins().length, 31);
+    assert.equal(A.m.suppressionsEnAttente(), 30);
+    // Alice confirme : la suppression est voulue, elle part.
+    A.m.autoriserSuppressions();
+    await A.m.synchroniser();
+    await B.m.synchroniser();
+    assert.deepEqual(cB.chemins(), ['Petit/p.md']);
+    assert.deepEqual(cB.dossiers().filter((d) => d.startsWith('Gros')), []);
+    assert.equal(A.m.suppressionsEnAttente(), 0);
+    // L'autorisation ne vaut que pour cette fois.
+    cA.modifier('Petit/q.md', 'q');
+    await A.m.synchroniser();
+    assert.equal(A.m.suppressionsAutorisees, false);
+  } finally { await srv.arreter(); }
+});
+
+test("si l'ami a ajouté un fichier dans le dossier supprimé, le fichier est conservé et le dossier revient", async () => {
+  const { srv, cA, cB, sync } = await deuxCoffres({ 'Projet/a.md': 'a', 'Projet/b.md': 'b' });
+  try {
+    await sync();
+    cA.retirerArbre('Projet');
+    cB.modifier('Projet/nouveau.md', 'ajouté par Bruno pendant ce temps');
+    await sync();
+    assert.equal(cB.texte('Projet/nouveau.md'), 'ajouté par Bruno pendant ce temps');
+    assert.equal(cA.texte('Projet/nouveau.md'), 'ajouté par Bruno pendant ce temps');
+    assert.equal(cB.texte('Projet/a.md'), null);
+    assert.equal(cA.texte('Projet/a.md'), null);
+  } finally { await srv.arreter(); }
+});
