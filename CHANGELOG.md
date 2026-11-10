@@ -1,5 +1,13 @@
 # Nouveautés
 
+## 0.1.7
+
+- **Les modifications de tes amis se voient dans la note.** Les lignes ajoutées ou changées par un ami sont surlignées à sa couleur, avec une étiquette « Prénom · +3 lignes −1 ligne · il y a 5 min » et un bouton « Vu ». Une ligne que tu retouches n’est plus surlignée.
+- **Un point dans l’explorateur de fichiers** à côté de chaque note modifiée par un ami, jusqu’à ce que tu l’ouvres.
+- **Section « À voir » en tête du panneau** : les notes modifiées depuis ta dernière visite ; un clic ouvre la note sur la première modification. « Tout marquer comme vu » et des commandes pour une note ou pour tout.
+- **Barre d’état cliquable** : elle ouvre le panneau et annonce « 3 à voir ».
+- **Panneau refait** : boutons alignés, pastille d’état en couleur, nom du fichier en gras et dossier à part, « il y a 5 min », badges Ajouté / Modifié / Supprimé, comparaison de versions lisible, adapté aux thèmes clair et sombre et au téléphone.
+
 ## 0.1.6
 
 - **Supprimer un dossier le supprime aussi chez les amis**, sous-dossiers compris, que ce soit depuis Obsidian ou depuis l’explorateur de fichiers du système. Les fichiers des dossiers retirés vont dans la corbeille du coffre chez les autres : rien n’est perdu.

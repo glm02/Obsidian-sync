@@ -580,3 +580,43 @@ test('un ami qui n’a pas la dernière version est signalé une seule fois, ave
   await plugin.verifierVersions();
   assert.equal(rendu.notice, '');
 });
+
+test('lignes modifiées : apparues ou changées, sans les lignes vides, avec les comptes', () => {
+  const { interne } = charger({});
+  const r = interne.lignesModifiees(['a', 'b', '', 'c'].join('\n'), ['a', 'b modifiée', '', '', 'c', 'd'].join('\n'));
+  assert.deepEqual([...r.lignes], ['b modifiée', 'd']);
+  assert.equal(r.ajouts, 3);
+  assert.equal(r.suppressions, 1);
+  assert.equal(interne.echapperCss('S3/"x"\\y.md'), 'S3/\\"x\\"\\\\y.md');
+  assert.equal(interne.couleurAuteur('Paulo'), interne.couleurAuteur('Paulo'), 'une personne garde sa couleur');
+  assert.equal(interne.ilYa(Date.now() - 5 * 60_000), 'il y a 5 min');
+});
+
+test('ce qu’un ami modifie devient « à voir » : statut, panneau, puis « Vu »', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST }, { setTimeout: (f) => { f(); return 0; } });
+  await plugin.onload();
+  plugin.moteur.api = async () => ({ json: async () => ({ ...INFO_TEST, changements: [] }) });
+  plugin.moteur.signaler('modifie-par', 'S3/ENER3/Cours.md', { auteur: 'Paulo', le: Date.now(), lignes: ['ligne changée'], ajouts: 1, suppressions: 0, nouveau: false, texte: true });
+  assert.equal(plugin.nombreAVoir(), 1);
+  assert.deepEqual([...plugin.etat.aVoir['S3/ENER3/Cours.md'].lignes], ['ligne changée']);
+  let barre = ''; plugin.barre.setText = (t) => { barre = t; }; plugin.afficher();
+  assert.match(barre, /1 à voir/);
+  await plugin.ruban.callback();
+  assert.ok(rendu.textes.includes('À voir (1)'));
+  assert.ok(rendu.textes.includes('Cours.md'), 'le nom du fichier, pas le chemin entier');
+  assert.ok(rendu.textes.includes('S3/ENER3'), 'le dossier à part');
+  assert.ok(rendu.textes.some((t) => t.startsWith('Paulo · +1 ligne ·')));
+  // Une seconde modification de la même note s'ajoute à la première.
+  plugin.moteur.signaler('modifie-par', 'S3/ENER3/Cours.md', { auteur: 'Paulo', le: Date.now(), lignes: ['autre ligne'], ajouts: 1, suppressions: 1, nouveau: false, texte: true });
+  assert.deepEqual([...plugin.etat.aVoir['S3/ENER3/Cours.md'].lignes].sort(), ['autre ligne', 'ligne changée']);
+  await rendu.boutons.get('Marquer S3/ENER3/Cours.md comme vu')();
+  assert.equal(plugin.nombreAVoir(), 0);
+  assert.equal(rendu.sauvegarde.aVoir['S3/ENER3/Cours.md'], undefined, 'l’état « vu » est enregistré');
+});
+
+test('les modifications de plus d’une semaine ne sont plus « à voir » au démarrage', async () => {
+  const vieux = Date.now() - 8 * 24 * 3600_000;
+  const { plugin } = charger({ ...ETAT_TEST, aVoir: { 'ancien.md': { auteurs: ['Paulo'], le: vieux, lignes: [] }, 'recent.md': { auteurs: ['Paulo'], le: Date.now(), lignes: [] } } });
+  await plugin.onload();
+  assert.deepEqual([...Object.keys(plugin.etat.aVoir)], ['recent.md']);
+});

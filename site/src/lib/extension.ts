@@ -3,7 +3,7 @@
  * Source : le code de plugin/main.js et CHANGELOG.md. À mettre à jour à chaque version
  * (la version doit suivre manifest.json, sinon le site annonce une version qui n'existe pas).
  */
-export const VERSION_EXTENSION = "0.1.6";
+export const VERSION_EXTENSION = "0.1.7";
 
 export type Fonction = { titre: string; texte: string };
 export type Groupe = { id: string; titre: string; resume: string; fonctions: Fonction[] };
@@ -38,6 +38,8 @@ export const groupes: Groupe[] = [
     titre: "Le groupe",
     resume: "Savoir qui est là et qui a changé quoi.",
     fonctions: [
+      { titre: "Modifications surlignées", texte: "Dans la note, les lignes qu’un ami vient de changer sont surlignées à sa couleur, avec son nom et un bouton « Vu ». Un point signale aussi la note dans l’explorateur." },
+      { titre: "À voir", texte: "En tête du panneau, les notes modifiées depuis ta dernière visite. Un clic t’emmène directement sur la modification." },
       { titre: "Invitations en un lien", texte: "Un lien valable 7 jours pour 5 personnes. Il s’ouvre directement dans Obsidian, ou un code seul suffit si le serveur est déjà connu." },
       { titre: "Membres et activité", texte: "La liste des membres avec leur photo, et les 40 derniers changements : qui a modifié quoi, et quand." },
       { titre: "Comparer une version", texte: "Sur un changement, vois ce qui a bougé (rouge : avant, vert : après) et ouvre la note directement sur le passage modifié." },
@@ -61,12 +63,22 @@ export const groupes: Groupe[] = [
 export const ouTrouver: Fonction[] = [
   { titre: "L’icône Cordée", texte: "Dans la barre de gauche d’Obsidian : elle ouvre le panneau de partage (état, pause, inviter, membres, profil)." },
   { titre: "La palette de commandes", texte: "Ctrl+P (Cmd+P sur Mac), tape « Cordée » : synchroniser, pause, inviter, voir l’activité, confirmer les suppressions." },
-  { titre: "La barre d’état", texte: "En bas à droite : « à jour », « synchronisation… », « fichiers à vérifier » ou « en pause »." },
+  { titre: "La barre d’état", texte: "En bas à droite : « à jour », « synchronisation… » ou « en pause », et le nombre de notes à voir. Un clic ouvre le panneau." },
 ];
 
 export type Version = { version: string; titre: string; points: string[] };
 
 export const versions: Version[] = [
+  {
+    version: "0.1.7",
+    titre: "On voit enfin ce qui a changé",
+    points: [
+      "Les lignes modifiées par un ami sont surlignées à sa couleur dans la note, avec son nom et un bouton « Vu ».",
+      "Un point dans l’explorateur à côté des notes modifiées, jusqu’à ce que tu les ouvres.",
+      "Section « À voir » dans le panneau : un clic ouvre la note sur la modification.",
+      "Panneau entièrement refait, barre d’état cliquable qui annonce ce qui est à voir.",
+    ],
+  },
   {
     version: "0.1.6",
     titre: "Les dossiers suivent partout",

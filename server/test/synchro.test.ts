@@ -271,3 +271,34 @@ test("si l'ami a ajouté un fichier dans le dossier supprimé, le fichier est co
     assert.equal(cA.texte('Projet/a.md'), null);
   } finally { await srv.arreter(); }
 });
+
+test("quand un ami modifie une note, on sait exactement quelles lignes surligner", async () => {
+  const { srv, cA, cB, A, B } = await deuxCoffres({ 'Cours.md': 'titre\nligne 1\nligne 2\n\nfin' });
+  try {
+    const signaux: Array<{ chemin: string; info: { auteur: string; lignes: string[]; ajouts: number; suppressions: number; nouveau: boolean } }> = [];
+    (B.m as { signaler: (q: string, a?: unknown, b?: unknown) => void }).signaler = (q, a, b) => { if (q === 'modifie-par') signaux.push({ chemin: a as string, info: b as never }); if (q === 'erreur') throw a; };
+    await A.m.synchroniser();
+    await B.m.synchroniser();
+    assert.equal(signaux[0].chemin, 'Cours.md');
+    assert.equal(signaux[0].info.nouveau, true, 'une note qui arrive est « nouvelle »');
+    assert.equal(signaux[0].info.auteur, 'Alice');
+
+    signaux.length = 0;
+    cA.modifier('Cours.md', 'titre\nligne 1 corrigée par Alice\nligne 2\n\nfin\najout final');
+    await A.m.synchroniser();
+    await B.m.synchroniser();
+    assert.equal(signaux.length, 1);
+    assert.deepEqual(signaux[0].info.lignes, ['ligne 1 corrigée par Alice', 'ajout final']);
+    assert.equal(signaux[0].info.ajouts, 2);
+    assert.equal(signaux[0].info.suppressions, 1);
+    assert.equal(signaux[0].info.nouveau, false);
+    assert.equal(cB.texte('Cours.md'), 'titre\nligne 1 corrigée par Alice\nligne 2\n\nfin\najout final');
+
+    // Nos propres envois ne sont pas « à voir » chez nous.
+    signaux.length = 0;
+    cB.modifier('Cours.md', 'titre de Bruno\nligne 1 corrigée par Alice\nligne 2\n\nfin\najout final');
+    await B.m.synchroniser();
+    await B.m.synchroniser();
+    assert.equal(signaux.length, 0);
+  } finally { await srv.arreter(); }
+});

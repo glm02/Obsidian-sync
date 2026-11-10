@@ -308,14 +308,14 @@ class Moteur {
 
     if (local === base) { // rien changé ici : on prend la version distante
       if (distant === null) await this.fichiers.supprimer(c.chemin);
-      else await this.fichiers.ecrire(c.chemin, await this.telecharger(distant));
+      else await this.ecrireDistant(c, distant, local === null ? null : undefined);
       this.majBase(c.chemin, distant);
       return;
     }
     // Modifié des deux côtés.
     if (distant === null) { delete this.etat.bases[c.chemin]; return; } // supprimé là-bas, modifié ici : on garde
     if (local === null) { // supprimé ici, modifié là-bas : on récupère
-      await this.fichiers.ecrire(c.chemin, await this.telecharger(distant));
+      await this.ecrireDistant(c, distant, null);
       this.majBase(c.chemin, distant);
       return;
     }
@@ -326,6 +326,7 @@ class Moteur {
       const f = fusionner(texteBase, texteLocal, texteDistant);
       await this.fichiers.ecrire(c.chemin, versBuffer(f.texte));
       this.majBase(c.chemin, distant); // le résultat fusionné partira au prochain envoi
+      this.signalerModif(c, texteLocal, f.texte);
       if (f.conflit) this.signaler('conflit', c.chemin, c.auteur);
     } else {
       await this.fichiers.renommer(c.chemin, nomCopieConflit(c.chemin, this.etat.prenom || 'moi'));
@@ -333,6 +334,23 @@ class Moteur {
       this.majBase(c.chemin, distant);
       this.signaler('conflit', c.chemin, c.auteur);
     }
+  }
+
+  /**
+   * Écrit la version d'un ami et dit ce qui a changé, pour que l'extension le surligne dans la note.
+   * avantConnu : null = le fichier n'existait pas ici ; undefined = on lit l'ancienne version avant d'écrire.
+   */
+  async ecrireDistant(c, distant, avantConnu) {
+    const contenu = await this.telecharger(distant);
+    let avant = avantConnu;
+    if (avant === undefined) avant = estTexte(c.chemin) ? versTexte((await this.fichiers.lire(c.chemin)) || new ArrayBuffer(0)) : '';
+    await this.fichiers.ecrire(c.chemin, contenu);
+    this.signalerModif(c, avant, estTexte(c.chemin) ? versTexte(contenu) : null);
+  }
+
+  signalerModif(c, avant, apres) {
+    const lignes = apres === null ? { lignes: [], ajouts: 0, suppressions: 0 } : lignesModifiees(avant || '', apres);
+    this.signaler('modifie-par', c.chemin, { auteur: c.auteur || null, auteurId: c.auteurId || null, le: c.le || Date.now(), nouveau: avant === null, texte: apres !== null, ...lignes });
   }
 
   majBase(chemin, hash) {
@@ -405,7 +423,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.1.6';
+const VERSION = '0.1.7';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -415,7 +433,7 @@ function comparerVersions(a, b) {
   return 0;
 }
 
-const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiers: {}, enAttente: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null };
+const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiers: {}, enAttente: {}, aVoir: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null };
 
 function expliquerErreur(erreur) {
   if ([401, 403].includes(erreur?.statut)) return 'Accès refusé. Ton accès au coffre a peut-être été retiré : demande une nouvelle invitation.';
@@ -596,9 +614,19 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.fichiersTropGros = new Set();
     this.fichiersBloques = new Map();
     this.dossiersEnAttente = new Set();
+    this.etat.aVoir = this.nettoyerAVoir(this.etat.aVoir);
     this.barre = this.addStatusBarItem();
+    // La barre d'état ouvre le panneau : c'est là qu'on regarde quand quelque chose a bougé.
+    this.barre.addClass?.('mod-clickable');
+    this.barre.onClickEvent?.(() => new PanneauCordee(this.app, this).open());
     this.moteur = this.creerMoteur();
     this.afficher('');
+    const surlignage = creerExtensionSurlignage(this);
+    if (surlignage) this.registerEditorExtension(surlignage);
+    if (globalThis.document?.head) {
+      this.styleMarques = document.head.createEl ? document.head.createEl('style', { attr: { id: 'cordee-marques' } }) : null;
+      this.rafraichirMarques();
+    }
     this.addSettingTab(new ReglagesCordee(this.app, this));
     O.addIcon('cordee-logo', ICONE_CORDEE);
     this.addRibbonIcon('cordee-logo', 'Cordée — ouvrir le partage', () => new PanneauCordee(this.app, this).open());
@@ -608,6 +636,8 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.addCommand({ id: 'pause', name: 'Mettre en pause ou reprendre la synchronisation', callback: () => this.mettreEnPause(!this.etat.enPause) });
     this.addCommand({ id: 'inviter', name: "Créer une invitation pour un ami", callback: () => this.inviter() });
     this.addCommand({ id: 'activite', name: 'Voir qui a modifié quoi', callback: () => new ActiviteModal(this.app, this).open() });
+    this.addCommand({ id: 'marquer-vu', name: 'Marquer les modifications de cette note comme vues', callback: () => { const f = this.app.workspace.getActiveFile?.(); if (f) this.marquerVu(f.path); } });
+    this.addCommand({ id: 'tout-vu', name: 'Tout marquer comme vu', callback: () => this.toutMarquerVu() });
     this.registerObsidianProtocolHandler('cordee', (params) => {
       const invitation = invitationValide(new URLSearchParams({ serveur: params.serveur || '', code: params.code || '' }));
       if (!invitation) { new O.Notice('Ce lien Cordée est incomplet. Demande une nouvelle invitation.'); return; }
@@ -620,13 +650,87 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.app.workspace.onLayoutReady(() => {
       const plus_tard = (f) => { if (f?.path) this.moteur.fichiers.invaliderDossier(f.path); this.programmer(2000); };
       for (const ev of ['create', 'modify', 'delete', 'rename']) this.registerEvent(this.app.vault.on(ev, plus_tard));
+      // Les marques « à voir » suivent un fichier renommé et disparaissent avec un fichier supprimé.
+      this.registerEvent(this.app.vault.on('rename', (f, ancien) => { if (this.etat.aVoir[ancien]) { this.etat.aVoir[f.path] = this.etat.aVoir[ancien]; delete this.etat.aVoir[ancien]; this.rafraichirMarques(); } }));
+      this.registerEvent(this.app.vault.on('delete', (f) => { if (this.etat.aVoir[f?.path]) { delete this.etat.aVoir[f.path]; this.rafraichirMarques(); } }));
+      // Ouvrir la note retire le point de l'explorateur ; les lignes restent surlignées jusqu'à « Vu ».
+      this.registerEvent(this.app.workspace.on('file-open', (f) => { const e = f && this.etat.aVoir[f.path]; if (e && !e.ouvert) { e.ouvert = true; this.rafraichirMarques(); } }));
       this.registerInterval(window.setInterval(() => this.lancer(), 5 * 60_000)); // filet de sécurité
       this.ecouter();
       this.lancer();
     });
   }
 
-  onunload() { this.arret = true; clearTimeout(this.minuteur); this.abonnesStatut.clear(); }
+  onunload() { this.arret = true; clearTimeout(this.minuteur); clearTimeout(this.minuteurMarques); this.abonnesStatut.clear(); this.styleMarques?.remove?.(); }
+
+  /* ---------- Ce que les amis ont changé et que tu n'as pas encore vu ---------- */
+
+  nettoyerAVoir(aVoir) {
+    const propre = {};
+    const limite = Date.now() - 7 * 24 * 3600_000; // au-delà d'une semaine, ce n'est plus une nouveauté
+    for (const [chemin, e] of Object.entries(aVoir || {})) if (e && e.le > limite) propre[chemin] = e;
+    return propre;
+  }
+
+  noterModif(chemin, info) {
+    const avant = this.etat.aVoir[chemin];
+    const auteurs = [...new Set([info.auteur || 'Un membre', ...(avant?.auteurs || [])])].slice(0, 4);
+    this.etat.aVoir[chemin] = {
+      auteurs,
+      le: Math.max(info.le || 0, avant?.le || 0) || Date.now(),
+      lignes: [...new Set([...(info.lignes || []), ...(avant?.lignes || [])])].slice(0, 400),
+      ajouts: (avant?.ajouts || 0) + (info.ajouts || 0),
+      suppressions: (avant?.suppressions || 0) + (info.suppressions || 0),
+      nouveau: !!(avant?.nouveau || info.nouveau),
+      texte: info.texte !== false,
+      ouvert: false,
+    };
+    const cles = Object.keys(this.etat.aVoir);
+    if (cles.length > 200) for (const c of cles.sort((a, b) => this.etat.aVoir[a].le - this.etat.aVoir[b].le).slice(0, cles.length - 200)) delete this.etat.aVoir[c];
+    this.rafraichirMarques();
+  }
+
+  nombreAVoir() { return Object.keys(this.etat.aVoir || {}).length; }
+
+  async marquerVu(chemin) {
+    if (!this.etat.aVoir[chemin]) return;
+    delete this.etat.aVoir[chemin];
+    this.rafraichirMarques(0);
+    try { await this.saveData(this.etat); } catch { /* sera enregistré à la prochaine synchro */ }
+  }
+
+  async toutMarquerVu() {
+    this.etat.aVoir = {};
+    this.rafraichirMarques(0);
+    try { await this.saveData(this.etat); } catch { /* idem */ }
+  }
+
+  /** Met à jour le point dans l'explorateur, le surlignage des notes ouvertes et le panneau (regroupé, 150 ms). */
+  rafraichirMarques(delai = 150) {
+    clearTimeout(this.minuteurMarques);
+    this.minuteurMarques = setTimeout(() => {
+      if (this.arret) return;
+      if (this.styleMarques) {
+        this.styleMarques.textContent = Object.entries(this.etat.aVoir).filter(([, e]) => !e.ouvert).map(([chemin, e]) =>
+          `.nav-file-title[data-path="${echapperCss(chemin)}"] .nav-file-title-content::after { content: ""; display: inline-block; width: 7px; height: 7px; margin-inline-start: 6px; border-radius: 50%; vertical-align: middle; background: ${couleurAuteur(e.auteurs?.[0])}; }`).join('\n');
+      }
+      if (this.effetRafraichir) this.app.workspace.iterateAllLeaves?.((leaf) => { const cm = leaf.view?.editor?.cm; if (cm?.dispatch) cm.dispatch({ effects: this.effetRafraichir.of(null) }); });
+      this.afficher();
+    }, delai);
+  }
+
+  /** Ouvre la note et place le curseur sur la première ligne modifiée par l'ami. */
+  async ouvrirModif(chemin) {
+    const e = this.etat.aVoir[chemin];
+    await this.app.workspace.openLinkText(chemin, '', false);
+    const vue = O.MarkdownView ? this.app.workspace.getActiveViewOfType?.(O.MarkdownView) : null;
+    const editeur = vue?.file?.path === chemin ? vue.editor : null;
+    if (!editeur || !e?.lignes?.length) return;
+    const lignes = new Set(e.lignes);
+    for (let n = 0; n < editeur.lineCount(); n++) {
+      if (lignes.has(editeur.getLine(n))) { editeur.setCursor({ line: n, ch: 0 }); editeur.scrollIntoView({ from: { line: n, ch: 0 }, to: { line: n, ch: 0 } }, true); return; }
+    }
+  }
 
   connecte() { return !!(this.etat.serveur && this.etat.coffreId && this.etat.jeton); }
 
@@ -655,10 +759,20 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
         else if (quoi === 'dossier-en-attente') this.dossiersEnAttente.add(a);
         else if (quoi === 'dossier-ok') this.dossiersEnAttente.delete(a);
         else if (quoi === 'fichier-trop-gros') this.fichiersTropGros.add(a);
+        else if (quoi === 'modifie-par') this.noterModif(a, b);
         else if (quoi === 'fichier-bloque') this.fichiersBloques.set(a, String(b?.message || b || '').replace(/\s+/g, ' ').slice(0, 120));
         this.afficher();
       },
     });
+  }
+
+  /** État résumé pour la pastille de couleur du panneau. */
+  etatCourt() {
+    if (!this.connecte() || this.etat.enPause) return 'pause';
+    if (this.phase === 'synchro') return 'synchro';
+    if (this.derniereErreur) return 'erreur';
+    if (this.fichiersTropGros.size || this.fichiersBloques.size || this.suppressionsBloquees || this.dossiersEnAttente.size) return 'attention';
+    return 'ok';
   }
 
   titreStatut() {
@@ -718,7 +832,8 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   }
 
   afficher() {
-    this.barre.setText(`Cordée : ${this.titreStatut()}`);
+    const aVoir = this.connecte() ? this.nombreAVoir() : 0;
+    this.barre.setText(`Cordée : ${this.titreStatut()}${aVoir ? ` · ${aVoir} à voir` : ''}`);
     for (const actualiser of this.abonnesStatut) actualiser();
   }
 
@@ -815,6 +930,123 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     await this.saveData(this.etat);
     this.afficher('');
   }
+}
+
+/**
+ * Lignes apparues ou modifiées dans « apres » par rapport à « avant » (comptées comme un multi-ensemble).
+ * Pas de limite de taille, contrairement à la comparaison détaillée : il s'agit seulement de savoir quoi surligner.
+ * Les lignes vides ne sont pas retenues (elles se ressemblent toutes).
+ */
+function lignesModifiees(avant, apres) {
+  const decouper = (t) => t === '' ? [] : t.replace(/\r\n/g, '\n').split('\n');
+  const restantes = new Map();
+  for (const l of decouper(avant)) restantes.set(l, (restantes.get(l) || 0) + 1);
+  const nouvelles = new Set();
+  let ajouts = 0;
+  for (const l of decouper(apres)) {
+    const n = restantes.get(l) || 0;
+    if (n > 0) { restantes.set(l, n - 1); continue; }
+    ajouts++;
+    if (l.trim() && nouvelles.size < 400) nouvelles.add(l);
+  }
+  let suppressions = 0;
+  for (const n of restantes.values()) suppressions += n;
+  return { lignes: [...nouvelles], ajouts, suppressions };
+}
+
+// Une couleur stable par personne, prise dans les couleurs du thème Obsidian (clair comme sombre).
+const COULEURS_AUTEURS = ['var(--color-blue)', 'var(--color-green)', 'var(--color-orange)', 'var(--color-purple)', 'var(--color-cyan)', 'var(--color-pink)'];
+function couleurAuteur(nom) {
+  let h = 0;
+  for (const car of String(nom || '')) h = (h * 31 + car.codePointAt(0)) >>> 0;
+  return COULEURS_AUTEURS[h % COULEURS_AUTEURS.length];
+}
+
+function ilYa(date, maintenant = Date.now()) {
+  const s = Math.max(0, Math.round((maintenant - date) / 1000));
+  if (s < 60) return 'à l’instant';
+  const m = Math.round(s / 60); if (m < 60) return `il y a ${m} min`;
+  const h = Math.round(m / 60); if (h < 24) return `il y a ${h} h`;
+  const j = Math.round(h / 24); if (j < 7) return `il y a ${j} j`;
+  return new Date(date).toLocaleDateString('fr-FR');
+}
+
+const nomFichier = (chemin) => chemin.split('/').pop();
+const dossierDe = (chemin) => chemin.includes('/') ? chemin.slice(0, chemin.lastIndexOf('/')) : '';
+// Valeur d'attribut CSS entre guillemets : seuls le guillemet, l'antislash et les retours à la ligne gênent.
+const echapperCss = (s) => String(s).replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a ');
+
+const resumeModif = (e) => {
+  const qui = (e.auteurs || []).join(', ') || 'Un membre';
+  const lignes = (n, signe) => n ? `${signe}${n} ligne${n > 1 ? 's' : ''}` : '';
+  const quoi = e.nouveau ? (e.texte === false ? 'a ajouté ce fichier' : 'a ajouté cette note')
+    : e.texte === false ? 'a modifié ce fichier'
+    : [lignes(e.ajouts, '+'), lignes(e.suppressions, '−')].filter(Boolean).join(' ') || 'a modifié la note';
+  return `${qui} · ${quoi} · ${ilYa(e.le)}`;
+};
+
+/**
+ * Surlignage dans l'éditeur (modes Source et Aperçu en direct) des lignes qu'un ami vient de modifier,
+ * à sa couleur, avec une étiquette « Prénom · +3 −1 lignes · il y a 5 min » et un bouton « Vu ».
+ * Les lignes sont reconnues par leur texte : si tu retouches une ligne, elle n'est plus surlignée.
+ * Renvoie null si CodeMirror n'est pas disponible (tests, très vieil Obsidian) : le reste de l'extension marche sans.
+ */
+function creerExtensionSurlignage(plugin) {
+  let V, S;
+  try { V = require('@codemirror/view'); S = require('@codemirror/state'); } catch { return null; }
+  if (!V?.ViewPlugin || !V?.Decoration || !V?.WidgetType || !S?.StateEffect || !O?.editorInfoField) return null;
+  const rafraichir = S.StateEffect.define();
+  plugin.effetRafraichir = rafraichir;
+
+  class Etiquette extends V.WidgetType {
+    constructor(texte, chemin, couleur) { super(); this.texte = texte; this.chemin = chemin; this.couleur = couleur; }
+    eq(autre) { return autre.texte === this.texte && autre.chemin === this.chemin; }
+    toDOM() {
+      const el = document.createElement('span');
+      el.className = 'cordee-etiquette';
+      el.style.setProperty('--cordee-couleur', this.couleur);
+      el.appendChild(document.createTextNode(this.texte));
+      const vu = document.createElement('button');
+      vu.className = 'cordee-etiquette-vu';
+      vu.type = 'button';
+      vu.textContent = 'Vu';
+      vu.setAttribute('aria-label', 'Marquer ces modifications comme vues');
+      vu.addEventListener('mousedown', (ev) => { ev.preventDefault(); ev.stopPropagation(); plugin.marquerVu(this.chemin); });
+      el.appendChild(vu);
+      return el;
+    }
+    ignoreEvent() { return true; }
+  }
+
+  const construire = (view) => {
+    const chemin = view.state.field(O.editorInfoField, false)?.file?.path;
+    const entree = chemin ? plugin.etat.aVoir?.[chemin] : null;
+    if (!entree?.lignes?.length) return V.Decoration.none;
+    const lignes = new Set(entree.lignes);
+    const couleur = couleurAuteur(entree.auteurs?.[0]);
+    const decos = [];
+    const doc = view.state.doc;
+    // L'étiquette va sur la première ligne modifiée de la note, même hors de l'écran.
+    for (let n = 1; n <= Math.min(doc.lines, 20000); n++) {
+      const l = doc.line(n);
+      if (l.text.trim() && lignes.has(l.text)) { decos.push(V.Decoration.widget({ widget: new Etiquette(resumeModif(entree), chemin, couleur), side: 1 }).range(l.to)); break; }
+    }
+    for (const { from, to } of view.visibleRanges) {
+      for (let pos = from; pos <= to;) {
+        const l = doc.lineAt(pos);
+        if (l.text.trim() && lignes.has(l.text)) decos.push(V.Decoration.line({ attributes: { class: 'cordee-ligne-modifiee', style: `--cordee-couleur: ${couleur}` } }).range(l.from));
+        pos = l.to + 1;
+      }
+    }
+    return V.Decoration.set(decos, true);
+  };
+
+  return V.ViewPlugin.fromClass(class {
+    constructor(view) { this.decorations = construire(view); }
+    update(u) {
+      if (u.docChanged || u.viewportChanged || u.transactions.some((t) => t.effects.some((e) => e.is(rafraichir)))) this.decorations = construire(u.view);
+    }
+  }, { decorations: (v) => v.decorations });
 }
 
 function calculerDiff(avant, apres) {
@@ -1045,8 +1277,13 @@ if (O) {
       const pause = boutonCordee(etat, '', () => plugin.mettreEnPause(!plugin.etat.enPause), { label: 'Pause ou reprise', cls: 'cordee-bouton-discret' });
       boutonCordee(etat, 'Synchroniser', () => plugin.lancer({ forcer: true }), { cls: 'cordee-bouton-discret' });
       const attention = tableau.createEl('p', { cls: 'cordee-attention', attr: { role: 'status' } });
+      const voir = tableau.createEl('div', { cls: 'cordee-section-titre' });
+      this.titreAVoir = voir.createEl('h3', { text: 'À voir' });
+      this.boutonToutVu = boutonCordee(voir, 'Tout marquer comme vu', () => plugin.toutMarquerVu(), { cls: 'cordee-bouton-discret' });
+      this.aVoirEl = tableau.createEl('div', { cls: 'cordee-a-voir' });
       this.desabonner = plugin.abonnerStatut(() => {
-        statut.setText(plugin.titreStatut()); pause.setText(plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
+        this.afficherAVoir();
+        statut.setText(plugin.titreStatut()); statut.setAttribute('data-etat', plugin.etatCourt()); pause.setText(plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
         pause.setAttribute('aria-label', plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
         attention.setText(plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
       });
@@ -1061,6 +1298,30 @@ if (O) {
       this.chargement = this.charger();
     }
     actif() { return !this.detruit && !this.plugin.arret && this.plugin.etat.coffreId === this.coffreId && this.plugin.etat.jeton === this.jeton; }
+    /** Notes modifiées par les amis depuis ta dernière visite : un clic ouvre la note sur la modification. */
+    afficherAVoir() {
+      const p = this.plugin, zone = this.aVoirEl;
+      if (!zone || this.detruit) return;
+      const entrees = Object.entries(p.etat.aVoir || {}).sort((a, b) => b[1].le - a[1].le);
+      const cle = JSON.stringify(entrees.map(([c, e]) => [c, e.le, e.ouvert, e.ajouts]));
+      if (cle === this.cleAVoir) return; // le statut change souvent : on ne reconstruit que si la liste change
+      this.cleAVoir = cle;
+      zone.empty();
+      this.boutonToutVu.hidden = !entrees.length;
+      this.titreAVoir.setText(entrees.length ? `À voir (${entrees.length})` : 'À voir');
+      if (!entrees.length) { zone.createEl('p', { text: 'Rien de nouveau : tu as tout vu.', cls: 'cordee-vide' }); return; }
+      for (const [chemin, e] of entrees.slice(0, 30)) {
+        const ligne = zone.createEl('div', { cls: 'cordee-a-voir-ligne' + (e.ouvert ? '' : ' cordee-non-ouvert') });
+        ligne.style?.setProperty?.('--cordee-couleur', couleurAuteur(e.auteurs?.[0]));
+        const ouvrir = boutonCordee(ligne, '', async () => { try { await p.ouvrirModif(chemin); } catch { new O.Notice(`Impossible d’ouvrir ${chemin}.`); } }, { label: `Ouvrir ${chemin} sur les modifications`, cls: 'cordee-a-voir-ouvrir' });
+        const tete = ouvrir.createEl('span', { cls: 'cordee-fichier-tete' });
+        tete.createEl('strong', { text: nomFichier(chemin), cls: 'cordee-fichier-chemin' });
+        if (dossierDe(chemin)) tete.createEl('span', { text: dossierDe(chemin), cls: 'cordee-fichier-dossier' });
+        ouvrir.createEl('span', { text: resumeModif(e), cls: 'cordee-details' });
+        boutonCordee(ligne, 'Vu', () => p.marquerVu(chemin), { label: `Marquer ${chemin} comme vu`, cls: 'cordee-bouton-discret cordee-bouton-vu' });
+      }
+      if (entrees.length > 30) zone.createEl('p', { text: `Et ${entrees.length - 30} autre(s).`, cls: 'cordee-details' });
+    }
     async charger() {
       if (!this.actif()) return;
       const tour = this.tour = (this.tour || 0) + 1;
@@ -1091,7 +1352,8 @@ if (O) {
           afficherAvatar(bouton, membre.nom, membre.avatar);
           const identite = bouton.createEl('span', { cls: 'cordee-collegue-identite' });
           identite.createEl('strong', { text: membre.nom });
-          identite.createEl('span', { text: membre.id ? `${this.comptes.get(membre.id) || 0} changement(s) récents` : 'Membre du groupe', cls: 'cordee-details' });
+          const n = this.comptes.get(membre.id) || 0;
+          identite.createEl('span', { text: membre.id ? (n ? `${n} changement${n > 1 ? 's' : ''} récent${n > 1 ? 's' : ''}` : 'Rien de récent') : 'Membre du groupe', cls: 'cordee-details' });
         }
         const selection = info.membres.find((m) => m.id === filtre);
         this.titreActivite.setText(filtre ? `Changements de ${selection?.nom || 'ce membre'}` : 'Derniers changements');
@@ -1105,10 +1367,12 @@ if (O) {
           carte.disabled = ancien || !Number.isSafeInteger(ch.rev);
           afficherAvatar(carte, ch.auteur, profils.get(ch.auteurId)?.avatar);
           const contenu = carte.createEl('span', { cls: 'cordee-fichier-contenu' });
-          contenu.createEl('strong', { text: ch.chemin, cls: 'cordee-fichier-chemin' });
-          contenu.createEl('span', { text: `${ch.auteur || 'Membre'} · ${ch.supprime ? 'a supprimé' : 'a modifié'} ${ch.chemin}`, cls: 'cordee-fichier-auteur' });
-          contenu.createEl('span', { text: new Date(ch.le).toLocaleString('fr-FR'), cls: 'cordee-details' });
-          carte.createEl('span', { text: ch.type === 'dossier' ? 'Dossier' : ch.supprime ? 'Supprimé' : ch.avantHash ? 'Modifié' : 'Ajouté', cls: 'cordee-type-changement' });
+          const tete = contenu.createEl('span', { cls: 'cordee-fichier-tete' });
+          tete.createEl('strong', { text: nomFichier(ch.chemin), cls: 'cordee-fichier-chemin' });
+          if (dossierDe(ch.chemin)) tete.createEl('span', { text: dossierDe(ch.chemin), cls: 'cordee-fichier-dossier' });
+          contenu.createEl('span', { text: `${ch.auteur || 'Membre'} · ${ch.supprime ? 'a supprimé' : 'a modifié'} ${nomFichier(ch.chemin)} · ${ilYa(ch.le)}`, cls: 'cordee-fichier-auteur', attr: { title: new Date(ch.le).toLocaleString('fr-FR') } });
+          const genre = ch.type === 'dossier' ? 'dossier' : ch.supprime ? 'supprime' : ch.avantHash ? 'modifie' : 'ajoute';
+          carte.createEl('span', { text: { dossier: 'Dossier', supprime: 'Supprimé', modifie: 'Modifié', ajoute: 'Ajouté' }[genre], cls: `cordee-type-changement cordee-type-${genre}` });
           carte.createEl('span', { text: '↗', cls: 'cordee-fichier-fleche', attr: { 'aria-hidden': 'true' } });
         }
       } catch (erreur) { if (this.actif() && this.tour === tour) { this.zone.empty(); this.zone.createEl('p', { text: expliquerErreur(erreur), cls: 'cordee-vide' }); } }
@@ -1221,4 +1485,4 @@ if (O) {
 
 module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
-module.exports.interne = { VERSION, comparerVersions, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
+module.exports.interne = { VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
