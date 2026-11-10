@@ -1,6 +1,6 @@
 # Obsidian-sync (Cordée)
 
-**Cordee** shares an Obsidian vault with friends using your own server. Install the beta with [BRAT](https://obsidian.md/plugins?id=obsidian42-brat), add `glm02/Obsidian-sync`, then open an invitation and choose a display name. Official directory submission is being prepared; Cordee is not listed yet.
+**Cordee** shares an Obsidian vault with friends using your own server. Install the beta with [BRAT](https://obsidian.md/plugins?id=obsidian42-brat), add `glm02/Obsidian-sync`, then open an invitation and choose a display name. The [official directory entry](https://community.obsidian.md/plugins/cordee) is published; version 0.1.2 was submitted for automated review on November 10, 2026. Use BRAT while in-app installation awaits approval.
 
 **Privacy and network use:** the plugin contacts only the server you choose after you explicitly create or join a shared vault. Notes, attachments, file paths, display names and change history are sent to that server. The host can read them; there is no end-to-end encryption in version 0.1. Excluded folders and Obsidian settings are not shared. There is no client analytics, advertising, payment or external account requirement. Data outside the open vault is not accessed. Access tokens are stored locally in the plugin's `data.json`; keep `.obsidian/` out of public repositories. The server retains file versions until its operator removes them. See [the publication report](docs/publication.md) for tested platforms and current limits.
 
@@ -64,7 +64,7 @@ Mets toujours le serveur derrière HTTPS : les jetons passent dans les en-têtes
 
 ### Sans télécharger les fichiers un par un
 
-Cordée n’est pas encore publiée dans le catalogue officiel. En attendant :
+La [fiche officielle de Cordee](https://community.obsidian.md/plugins/cordee) est publiée ; l’installation depuis le catalogue attend la validation de la revue automatique. En attendant :
 
 1. Ouvre de préférence un coffre vide pour rejoindre tes amis.
 2. Dans les modules complémentaires d’Obsidian, installe et active **BRAT**.

@@ -1,5 +1,9 @@
 # Publication de Cordee
 
+## État au 10 novembre 2026
+
+La [fiche publique officielle](https://community.obsidian.md/plugins/cordee) est publiée. La version 0.1.2, commit `f692cb2`, est soumise au contrôle automatique ; le dernier statut observé est **Pending**, avec le message « Your entry is live. An automated review is in progress. ». La fiche publique répond HTTP 200. Ceci ne signifie pas que l’installation depuis le catalogue est déjà approuvée. Le statut actuel se consulte dans le tableau de bord Obsidian Community.
+
 ## Candidat 0.1.2
 
 - Identifiant : `cordee`.
