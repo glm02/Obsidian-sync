@@ -1,5 +1,13 @@
 # Nouveautés
 
+## 0.1.4
+
+- Nom affiché modifiable dans Mon profil, sans changer sa photo ni perdre l’attribution de ses changements.
+- Serveur et nom retenus sur cet appareil pour préparer les nouveaux coffres, sans transférer les accès au groupe.
+- Un code d’invitation seul suffit lorsque le serveur est déjà connu ; une invitation complète peut choisir un autre serveur.
+- Formulaire de connexion allégé, création d’un nouveau partage à la demande et nom du coffre proposé automatiquement.
+- L’API de profil accepte les modifications partielles du nom et de la photo, avec validation avant écriture.
+
 ## 0.1.3
 
 - Pause et reprise de la synchronisation automatique, avec conservation du choix entre deux lancements.

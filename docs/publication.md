@@ -1,5 +1,11 @@
 # Publication de Cordee
 
+## Version 0.1.4
+
+Nom affiché modifiable depuis Mon profil, indépendamment de la photo. Les mises à jour partielles sont validées avant l’écriture et conservent l’identifiant du membre. Le serveur et le nom sont retenus localement sur l’appareil pour préparer les nouveaux coffres ; aucun jeton ni code n’est partagé entre coffres. L’adhésion ou la création reste explicite.
+
+La revue 0.1.3 est terminée. Cordee est présent dans l’export frais du catalogue communautaire ; sa propagation vers le cache et le miroir consommé par l’application peut demander un délai. Obsidian annonce une disponibilité dans la recherche sous 24 heures après revue réussie : [annonce officielle](https://obsidian.md/blog/future-of-plugins/).
+
 ## Version 0.1.3
 
 Ajout du pilotage de la synchronisation (pause persistante, reprise et synchronisation ponctuelle), d’un état détaillé et de l’accès aux membres et à l’activité depuis le panneau. Les fichiers trop volumineux et les erreurs sont signalés. `styles.css` fait maintenant partie des pièces jointes et de l’archive, en plus de `main.js` et `manifest.json`.

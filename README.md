@@ -1,6 +1,6 @@
 # Cordee
 
-**Cordee** shares an Obsidian vault with friends using your own server. Install the beta with [BRAT](https://obsidian.md/plugins?id=obsidian42-brat), add `glm02/Obsidian-sync`, then open an invitation and choose a display name. The [official directory entry](https://community.obsidian.md/plugins/cordee) is published; the automated review of version 0.1.2 completed on November 10, 2026, with recommendations and warnings. BRAT remains available for beta installation.
+**Cordee** shares an Obsidian vault with friends using your own server. Open the [official directory entry](https://community.obsidian.md/plugins/cordee), install Cordee, then open an invitation and choose a display name. The review of version 0.1.3 completed on November 10, 2026. Obsidian says in-app search can take up to 24 hours to update; [BRAT](https://obsidian.md/plugins?id=obsidian42-brat) remains an alternative with repository `glm02/Obsidian-sync`.
 
 **Privacy and network use:** the plugin contacts only the server you choose after you explicitly create or join a shared vault. Notes, attachments, file paths, display names and change history are sent to that server. The host can read them; there is no end-to-end encryption in version 0.1. Excluded folders and Obsidian settings are not shared. There is no client analytics, advertising, payment or external account requirement. Data outside the open vault is not accessed. Access tokens are stored locally in the plugin's `data.json`; keep `.obsidian/` out of public repositories. The server retains file versions until its operator removes them. See [the publication report](docs/publication.md) for tested platforms and current limits.
 
@@ -85,6 +85,8 @@ Le logo Cordée apparaît dans la barre de gauche. Clique dessus pour ouvrir le 
 
 Obsidian gère les extensions coffre par coffre : installe et active Cordee dans chaque coffre où tu veux l’utiliser. Chaque coffre garde sa connexion indépendante ; l’installation ne partage aucune note à elle seule.
 
+Le serveur et le nom affiché sont retenus sur cet appareil pour les prochains coffres. Un code d’invitation seul suffit alors ; une invitation complète renseigne son propre serveur. Le bouton **Changer de serveur** permet d’en choisir un autre. Les jetons d’accès et codes de création restent propres à leur connexion et ne sont pas recopiés dans ces préférences.
+
 Ensuite, dans les réglages de Cordée :
 - **Pour créer un coffre partagé** : adresse du serveur, nom du coffre, ton prénom et le code de création. Tout le coffre est envoyé.
 - **Pour rejoindre** : colle le lien d'invitation et ton prénom. Le mieux est de partir d'un coffre vide.
@@ -100,6 +102,8 @@ Le panneau Cordée affiche son état, le nombre de fichiers partagés et l’heu
 ### Photo de profil
 
 Dans le panneau connecté, ouvre **Mon profil**, choisis une image JPEG, PNG ou WebP, vérifie l’aperçu puis confirme son envoi. L’extension recadre la photo en carré et la réencode localement avant de l’envoyer, sans les métadonnées du fichier original. Tu peux ensuite retirer la photo. Le profil est propre au groupe partagé et visible par ses membres, ainsi que par l’hébergeur du serveur.
+
+Tu peux aussi y modifier ton **Nom affiché**, puis cliquer sur **Enregistrer le nom**. Le changement conserve ta photo et l’identifiant de tes contributions ; l’activité présente le nouveau nom pour tes changements.
 
 Les membres et l’activité affichent la photo ou les initiales, toujours avec le nom de la personne. Les changements restent associés à l’identifiant de leur auteur, même si deux personnes portent le même nom. Cette fonction demande un serveur prenant en charge les profils ; la synchronisation reste compatible avec les serveurs précédents.
 

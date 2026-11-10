@@ -113,6 +113,16 @@ function invitationValide(params) {
   } catch { return null; }
 }
 
+const CLE_PREFERENCES = 'cordee.preferences.v1';
+
+function lirePreferences() {
+  try {
+    const valeur = JSON.parse(globalThis.localStorage?.getItem(CLE_PREFERENCES) || '{}');
+    const invitation = invitationValide(new URLSearchParams({ serveur: valeur?.serveur || '', code: 'test' }));
+    return { serveur: invitation?.serveur || '', prenom: typeof valeur?.prenom === 'string' ? valeur.prenom.trim().slice(0, 60) : '' };
+  } catch { return { serveur: '', prenom: '' }; }
+}
+
 function dansDossier(chemin, dossier) {
   const prefixe = String(dossier || '').replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
   const normalise = String(chemin).replace(/\\/g, '/');
@@ -414,6 +424,7 @@ let InvitationModal, ActiviteModal, ProfilModal, ReglagesCordee, PanneauCordee;
 class CordeePlugin extends (O ? O.Plugin : Object) {
   async onload() {
     this.etat = Object.assign({}, PAR_DEFAUT, await this.loadData());
+    if (this.connecte()) this.memoriserPreferences();
     this.phase = 'pret';
     this.derniereErreur = '';
     this.abonnesStatut = new Set();
@@ -450,6 +461,13 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   onunload() { this.arret = true; clearTimeout(this.minuteur); this.abonnesStatut.clear(); }
 
   connecte() { return !!(this.etat.serveur && this.etat.coffreId && this.etat.jeton); }
+
+  memoriserPreferences() {
+    // Préférences de cet appareil uniquement : aucun jeton, code ou contenu de coffre.
+    try {
+      globalThis.localStorage?.setItem(CLE_PREFERENCES, JSON.stringify({ serveur: this.etat.serveur, prenom: this.etat.prenom }));
+    } catch { /* Un stockage indisponible ne doit pas empêcher de rejoindre. */ }
+  }
 
   creerMoteur() {
     return new Moteur({
@@ -554,6 +572,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     if (r.statut >= 400) throw new Error((j && j.erreur) || `Erreur ${r.statut}`);
     Object.assign(this.etat, { serveur: serveur.replace(/\/$/, ''), coffreId: j.coffreId, nomCoffre: j.nom, jeton: j.jeton, prenom: corps.prenom, derniereRev: 0, bases: {}, cache: {}, enPause: false, derniereSynchro: null });
     await this.saveData(this.etat);
+    this.memoriserPreferences();
     this.afficher('');
     await this.lancer();
   }
@@ -596,7 +615,8 @@ if (O) {
       this.ferme = false;
       const tour = this.tour = (this.tour || 0) + 1;
       const coffreId = this.plugin.etat.coffreId, jeton = this.plugin.etat.jeton;
-      const actif = () => !this.ferme && this.tour === tour && !this.plugin.arret && this.plugin.etat.coffreId === coffreId && this.plugin.etat.jeton === jeton;
+      const memeConnexion = () => !this.plugin.arret && this.plugin.etat.coffreId === coffreId && this.plugin.etat.jeton === jeton;
+      const actif = () => !this.ferme && this.tour === tour && memeConnexion();
       c.empty();
       c.createEl('h3', { text: 'Mon profil' });
       c.createEl('p', { text: 'Ta photo sera visible par les membres de ce coffre, à côté de tes changements. Elle est recadrée en carré et ses métadonnées sont retirées sur cet appareil.' });
@@ -604,22 +624,55 @@ if (O) {
       try {
         const info = await (await this.plugin.moteur.api('GET', `/api/coffres/${coffreId}`)).json();
         if (!actif()) return;
-        const moi = info.membres?.find((membre) => membre.id && membre.id === info.moiId);
-        if (!moi) { etat.setText('Les photos de profil demandent une mise à jour du serveur Cordée. La synchronisation reste disponible.'); return; }
+        const trouve = info.membres?.find((membre) => membre.id && membre.id === info.moiId);
+        if (!trouve) { etat.setText('Le profil demande une mise à jour du serveur Cordée. La synchronisation reste disponible.'); return; }
+        const moi = { ...trouve };
         let actuel = avatarValide(moi.avatar), choix = null, lecture = 0, occupe = false;
         const apercu = c.createEl('div', { cls: 'cordee-profil-apercu' });
         const montrer = (avatar) => { apercu.empty(); afficherAvatar(apercu, moi.nom, avatar); apercu.createEl('span', { text: moi.nom }); };
         montrer(actuel);
+        let saisieNom = moi.nom, champNom, enregistrerNom;
+        new O.Setting(c).setName('Nom affiché').setDesc('De 1 à 60 caractères. Visible par les membres de ce coffre et dans ton activité.').addText((champ) => {
+          champNom = champ;
+          champ.setValue(saisieNom).onChange((valeur) => { saisieNom = valeur; });
+          champ.inputEl.maxLength = 60;
+        }).addButton((b) => { enregistrerNom = b; b.setButtonText('Enregistrer le nom').onClick(async () => {
+          if (!actif() || occupe) return;
+          const nom = saisieNom.trim();
+          if (!nom || nom.length > 60) { etat.setText('Le nom affiché doit contenir de 1 à 60 caractères.'); return; }
+          occupe = true; boutons(); etat.setText('Enregistrement du nom…');
+          let profil;
+          try {
+            profil = await (await this.plugin.moteur.api('PUT', `/api/coffres/${coffreId}/profil`, { nom })).json();
+          } catch (erreur) {
+            if (actif()) etat.setText(erreur.statut === 404 ? 'Ce serveur ne permet pas encore de modifier le profil. Mets le serveur Cordée à jour.' : erreur.statut === 400 ? 'Nom refusé par le serveur. Utilise de 1 à 60 caractères, puis réessaie.' : 'Nom non enregistré. ' + expliquerErreur(erreur));
+          }
+          if (profil && memeConnexion()) {
+            this.plugin.etat.prenom = profil.nom;
+            let sauvegardeLocale = true;
+            try { await this.plugin.saveData(this.plugin.etat); } catch { sauvegardeLocale = false; }
+            if (memeConnexion()) {
+              try { await this.plugin.memoriserPreferences(); } catch { sauvegardeLocale = false; }
+              this.plugin.afficher();
+            }
+            if (actif()) {
+              moi.nom = profil.nom; saisieNom = profil.nom; champNom.setValue(profil.nom); montrer(choix || actuel);
+              etat.setText(sauvegardeLocale ? 'Nom enregistré. Les membres le verront dans ton activité.' : 'Nom mis à jour sur le serveur et dans cette session, mais la sauvegarde locale a échoué. Il faudra peut-être le ressaisir après redémarrage.');
+            }
+          }
+          if (actif()) { occupe = false; boutons(); }
+        }); });
         c.createEl('label', { text: 'Choisir une photo (JPEG, PNG ou WebP, 10 Mo maximum)', cls: 'cordee-details' });
         const fichier = c.createEl('input', { type: 'file', cls: 'cordee-choix-photo', attr: { accept: 'image/jpeg,image/png,image/webp', 'aria-label': 'Choisir ma photo de profil' } });
         let enregistrer, retirer;
-        const boutons = () => { enregistrer?.setDisabled(occupe || !choix); retirer?.setDisabled(occupe || !actuel); fichier.disabled = occupe; };
+        const boutons = () => { enregistrer?.setDisabled(occupe || !choix); retirer?.setDisabled(occupe || !actuel); enregistrerNom.setDisabled(occupe); champNom.inputEl.disabled = occupe; fichier.disabled = occupe; };
         const sauver = async (avatar) => {
           if (!actif() || occupe) return;
           occupe = true; ++lecture; boutons(); etat.setText('Enregistrement du profil…');
           try {
             const profil = await (await this.plugin.moteur.api('PUT', `/api/coffres/${coffreId}/profil`, { avatar })).json();
             if (!actif()) return;
+            if (typeof profil.nom === 'string') moi.nom = profil.nom;
             actuel = avatarValide(profil.avatar); choix = null; fichier.value = ''; montrer(actuel);
             etat.setText(actuel ? 'Photo enregistrée. Les membres la verront en ouvrant ou en actualisant l’activité.' : 'Photo retirée. Tes initiales seront affichées.');
           } catch (erreur) {
@@ -687,7 +740,11 @@ if (O) {
   };
 
   ReglagesCordee = class extends O.PluginSettingTab {
-    constructor(app, plugin) { super(app, plugin); this.plugin = plugin; this.form = { serveur: '', prenom: '', invitation: '', nom: '', code: '', dossiersIgnores: plugin.etat.dossiersIgnores || '' }; }
+    constructor(app, plugin) {
+      super(app, plugin); this.plugin = plugin;
+      const preferences = lirePreferences();
+      this.form = { serveur: preferences.serveur || plugin.etat.serveur, prenom: preferences.prenom || plugin.etat.prenom, invitation: '', nom: app.vault.getName?.() || '', code: '', creer: false, adresseVisible: false, dossiersIgnores: plugin.etat.dossiersIgnores || '' };
+    }
     display() {
       this.afficherDans(this.containerEl, () => this.display());
     }
@@ -699,13 +756,14 @@ if (O) {
       c.empty();
       if (p.connecte()) {
         c.createEl('h3', { text: `Coffre partagé : ${e.nomCoffre}` });
-        c.createEl('p', { text: `Serveur ${e.serveur} · connecté en tant que ${e.prenom}` });
+        const identite = c.createEl('p');
         const statut = c.createEl('p', { cls: 'cordee-etat' });
         const chiffres = c.createEl('p', { cls: 'cordee-details' });
         const attention = c.createEl('p', { cls: 'cordee-attention' });
         let boutonPause;
         const automatique = new O.Setting(c).setName('Synchronisation automatique').addButton((b) => { boutonPause = b; b.onClick(async () => { await p.mettreEnPause(!e.enPause); }); });
         this.desabonner = p.abonnerStatut(() => {
+          identite.setText(`Serveur ${e.serveur} · connecté en tant que ${e.prenom}`);
           boutonPause.setButtonText(e.enPause ? 'Reprendre' : 'Mettre en pause');
           automatique.setDesc(e.enPause ? 'Tes prochaines modifications resteront locales jusqu’à la reprise.' : 'Envoi des modifications et réception des changements du groupe.');
           statut.setText(p.titreStatut());
@@ -717,35 +775,44 @@ if (O) {
         new O.Setting(c).setName('Inviter un ami').setDesc('Crée un lien à lui envoyer.').addButton((b) => b.setButtonText('Créer une invitation').setCta().onClick(() => p.inviter()));
         new O.Setting(c).setName('Synchroniser maintenant').setDesc('Lance une synchronisation ponctuelle, même pendant la pause.').addButton((b) => b.setButtonText('Synchroniser').onClick(() => p.lancer({ forcer: true })));
         new O.Setting(c).setName('Membres et activité').setDesc('Retrouve les membres du groupe et les 40 derniers changements.').addButton((b) => b.setButtonText('Voir l’activité').onClick(() => new ActiviteModal(this.app, p).open()));
-        new O.Setting(c).setName('Photo de profil').setDesc('Une photo ou tes initiales à côté de tes changements, pour les membres de ce coffre.').addButton((b) => b.setButtonText('Mon profil').onClick(() => new ProfilModal(this.app, p).open()));
+        new O.Setting(c).setName('Mon profil').setDesc('Modifie ton nom affiché et ta photo pour ce groupe.').addButton((b) => b.setButtonText('Mon profil').onClick(() => new ProfilModal(this.app, p).open()));
         new O.Setting(c).setName('Dossiers non partagés').setDesc('Séparés par des virgules, par exemple : Brouillons, Perso').addText((t) => t.setValue(e.dossiersIgnores).onChange(async (v) => { e.dossiersIgnores = v; await p.saveData(e); }));
         new O.Setting(c).setName('Quitter ce coffre').setDesc('Tes fichiers restent sur ton ordinateur ; ils ne se synchronisent plus.').addButton((b) => b.setButtonText('Quitter').setWarning().onClick(async () => { await p.quitter(); rafraichir(); }));
         return;
       }
       c.createEl('h3', { text: 'Rejoindre un coffre' });
       c.createEl('p', { text: 'Pars de préférence d’un coffre vide. Les notes de ce coffre seront partagées avec le groupe.' });
-      new O.Setting(c).setName("Lien d'invitation").setDesc('Ouvre le lien reçu depuis le site, ou colle-le ici.').addText((t) => t.setValue(f.invitation).onChange((v) => { f.invitation = v; }));
-      new O.Setting(c).setName('Ton prénom').setDesc('Visible par les autres membres.').addText((t) => t.setValue(f.prenom).onChange((v) => { f.prenom = v; }));
+      new O.Setting(c).setName('Nom affiché').setDesc('Visible par le groupe. Tu pourras le modifier dans Mon profil.').addText((t) => t.setValue(f.prenom).onChange((v) => { f.prenom = v; }));
+      const serveur = new O.Setting(c).setName('Serveur').setDesc(f.serveur || 'Une invitation complète renseigne le serveur automatiquement.').addButton((b) => b.setButtonText('Changer de serveur').onClick(() => { f.adresseVisible = !f.adresseVisible; rafraichir(); }));
+      let champServeur;
+      if (f.adresseVisible || (!f.serveur && f.creer)) new O.Setting(c).setName('Adresse du serveur').addText((t) => { champServeur = t; t.setPlaceholder('https://cordee.exemple.fr').setValue(f.serveur).onChange((v) => { f.serveur = v.trim(); serveur.setDesc(f.serveur || 'Colle une invitation complète ou indique le serveur.'); }); });
+      new O.Setting(c).setName('Invitation ou code').setDesc('Colle le lien reçu. Si le serveur est déjà renseigné, le code seul suffit.').addText((t) => t.setValue(f.invitation).onChange((v) => {
+        f.invitation = v;
+        const invitation = lireInvitation(v, f.serveur);
+        if (invitation) { f.serveur = invitation.serveur; champServeur?.setValue(f.serveur); serveur.setDesc(`Serveur de l’invitation : ${invitation.serveur}`); }
+      }));
       new O.Setting(c).addButton((b) => b.setButtonText('Rejoindre').setCta().onClick(async () => {
         const inv = lireInvitation(f.invitation, f.serveur);
-        if (!inv?.serveur || !/^[A-Za-z0-9-]{1,20}$/.test(inv.code)) { new O.Notice('Colle une invitation complète et valide.'); return; }
-        if (!f.prenom.trim()) { new O.Notice('Indique ton prénom pour rejoindre.'); return; }
+        if (!inv?.serveur || !/^[A-Za-z0-9-]{1,20}$/.test(inv.code)) { new O.Notice('Colle une invitation complète, ou indique le serveur pour utiliser un code seul.'); return; }
+        if (!f.prenom.trim() || f.prenom.trim().length > 60) { new O.Notice('Indique un nom affiché de 1 à 60 caractères.'); return; }
         e.dossiersIgnores = f.dossiersIgnores;
         try { await p.rejoindreOuCreer('/api/rejoindre', { code: inv.code, prenom: f.prenom.trim() }, inv.serveur); rafraichir(); }
         catch (err) { new O.Notice('Cordée : ' + err.message); }
       }));
       new O.Setting(c).setName('Dossiers non partagés').setDesc('Facultatif. À exclure avant le premier envoi, séparés par des virgules.').addText((t) => t.setValue(f.dossiersIgnores).onChange((v) => { f.dossiersIgnores = v; }));
+      if (!f.creer) {
+        new O.Setting(c).setName('Partager ce coffre avec des amis').setDesc('Crée un nouveau groupe sur ton serveur.').addButton((b) => b.setButtonText('Créer un nouveau partage').onClick(() => { f.creer = true; rafraichir(); }));
+        return;
+      }
       c.createEl('h3', { text: 'Ou créer un coffre partagé' });
       c.createEl('p', { text: "Il faut le code de création donné par la personne qui héberge le serveur. Tout ce coffre sera envoyé." });
-      new O.Setting(c).setName('Adresse du serveur').addText((t) => t.setPlaceholder('https://cordee.exemple.fr').setValue(f.serveur).onChange((v) => { f.serveur = v.trim(); }));
       new O.Setting(c).setName('Nom du coffre').addText((t) => t.setValue(f.nom).onChange((v) => { f.nom = v; }));
-      new O.Setting(c).setName('Ton prénom').addText((t) => t.setValue(f.prenom).onChange((v) => { f.prenom = v; }));
       new O.Setting(c).setName('Code de création').addText((t) => { t.inputEl.type = 'password'; t.onChange((v) => { f.code = v; }); });
       new O.Setting(c).addButton((b) => b.setButtonText('Créer et partager').setCta().onClick(async () => {
         if (!invitationValide(new URLSearchParams({ serveur: f.serveur, code: 'test' }))) { new O.Notice('Indique une adresse de serveur HTTP ou HTTPS valide.'); return; }
-        if (!f.nom.trim() || !f.prenom.trim() || !f.code.trim()) { new O.Notice('Indique le nom du coffre, ton prénom et le code de création.'); return; }
+        if (!f.nom.trim() || !f.prenom.trim() || f.prenom.trim().length > 60 || !f.code.trim()) { new O.Notice('Indique le nom du coffre, ton nom affiché (1 à 60 caractères) et le code de création.'); return; }
         e.dossiersIgnores = f.dossiersIgnores;
-        try { await p.rejoindreOuCreer('/api/coffres', { nom: f.nom, prenom: f.prenom, codeCreation: f.code }, f.serveur); rafraichir(); }
+        try { await p.rejoindreOuCreer('/api/coffres', { nom: f.nom.trim(), prenom: f.prenom.trim(), codeCreation: f.code.trim() }, f.serveur); rafraichir(); }
         catch (err) { new O.Notice('Cordée : ' + err.message); }
       }));
     }

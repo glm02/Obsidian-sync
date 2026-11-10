@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 function charger(etat, navigateur = {}) {
-  const rendu = { textes: [], boutons: new Map(), elements: [], ouvertures: 0 };
+  const rendu = { textes: [], boutons: new Map(), elements: [], champs: [], ouvertures: 0 };
   const container = (racine = true) => ({
     enfants: [],
     empty() {
@@ -12,13 +12,12 @@ function charger(etat, navigateur = {}) {
       const ajouter = (node) => { descendants.add(node); node.enfants.forEach(ajouter); };
       this.enfants.forEach(ajouter); this.enfants = [];
       rendu.elements = rendu.elements.filter((element) => !descendants.has(element));
-      if (racine) { rendu.textes = []; rendu.boutons.clear(); }
+      if (racine) { rendu.textes = []; rendu.boutons.clear(); rendu.champs = []; }
     },
     setText(text) { this.textContent = text; rendu.textes.push(text); },
     replaceWith() { rendu.elements = rendu.elements.filter((element) => element !== this); },
     createEl(tag, attrs = {}) { const enfant = container(false); enfant.tag = tag; enfant.attrs = attrs; enfant.textContent = attrs.text || ''; if (attrs.text) rendu.textes.push(attrs.text); this.enfants.push(enfant); rendu.elements.push(enfant); return enfant; },
   });
-  const champ = { inputEl: {}, setValue() { return this; }, setPlaceholder() { return this; }, onChange() { return this; } };
   const obsidian = {
     Plugin: class {
       constructor() { this.app = { workspace: { onLayoutReady() {} }, vault: { configDir: 'configuration', getFiles: () => [] } }; }
@@ -34,9 +33,12 @@ function charger(etat, navigateur = {}) {
     PluginSettingTab: class { constructor(app) { this.app = app; this.containerEl = container(); } },
     Modal: class { constructor(app) { this.app = app; this.contentEl = container(); } open() { rendu.ouvertures++; rendu.modal = this; return this.onOpen(); } },
     Setting: class {
-      setName() { return this; }
+      setName(nom) { this.nom = nom; return this; }
       setDesc() { return this; }
-      addText(callback) { callback(champ); return this; }
+      addText(callback) {
+        const champ = { inputEl: {}, setValue(v) { this.value = v; return this; }, setPlaceholder() { return this; }, onChange(action) { this.change = action; return this; } };
+        callback(champ); rendu.champs.push({ nom: this.nom, champ }); return this;
+      }
       addButton(callback) {
         let label, action;
         const bouton = { setButtonText(text) { if (label) rendu.boutons.delete(label); label = text; if (action) rendu.boutons.set(label, () => !this.disabled && action()); return this; }, setDisabled(disabled) { this.disabled = disabled; return this; }, setCta() { return this; }, setWarning() { return this; }, onClick(callback) { action = callback; if (label) rendu.boutons.set(label, () => !this.disabled && action()); return this; } };
@@ -69,7 +71,53 @@ test('le logo ouvre le partage connecté et conserve le formulaire après décon
   assert.ok(rendu.textes.includes('Rejoindre un coffre'));
   assert.ok(rendu.boutons.has('Rejoindre'));
   plugin.onglet.display();
+  assert.ok(rendu.boutons.has('Créer un nouveau partage'));
+  await rendu.boutons.get('Créer un nouveau partage')();
   assert.ok(rendu.boutons.has('Créer et partager'));
+});
+
+test('un nouveau coffre retrouve serveur et nom sans reprendre les accès du précédent', async () => {
+  const valeurs = new Map();
+  const localStorage = { getItem: (cle) => valeurs.get(cle) || null, setItem: (cle, valeur) => valeurs.set(cle, valeur) };
+  const premier = charger({ serveur: 'https://cordee.example', coffreId: 'ancien', jeton: 'jeton-local-test', prenom: 'Membre test' }, { localStorage });
+  await premier.plugin.onload();
+  const preferences = JSON.parse(valeurs.get('cordee.preferences.v1'));
+  assert.deepEqual(preferences, { serveur: 'https://cordee.example', prenom: 'Membre test' });
+  const { plugin, rendu } = charger({}, { localStorage });
+  await plugin.onload();
+  assert.equal(plugin.connecte(), false);
+  assert.equal(plugin.etat.jeton, '');
+  plugin.ruban.callback();
+  assert.equal(rendu.champs.find(c => c.nom === 'Nom affiché').champ.value, 'Membre test');
+  assert.equal(rendu.champs.some(c => c.nom === 'Adresse du serveur'), false);
+  assert.equal(rendu.boutons.has('Créer et partager'), false);
+  let appel;
+  plugin.rejoindreOuCreer = async (...args) => { appel = args; };
+  rendu.champs.find(c => c.nom === 'Invitation ou code').champ.change('ABCD-EFGH-JKLM');
+  assert.equal(appel, undefined);
+  await rendu.boutons.get('Rejoindre')();
+  assert.equal(appel[0], '/api/rejoindre');
+  assert.equal(appel[1].prenom, 'Membre test');
+  assert.equal(appel[2], 'https://cordee.example');
+  rendu.champs.find(c => c.nom === 'Invitation ou code').champ.change('https://autre.example/rejoindre/ABCD-EFGH-JKLM');
+  await rendu.boutons.get('Rejoindre')();
+  assert.equal(appel[2], 'https://autre.example');
+  assert.equal(JSON.parse(valeurs.get('cordee.preferences.v1')).serveur, 'https://cordee.example');
+});
+
+test('les préférences indisponibles ou invalides ne bloquent pas une invitation complète', async () => {
+  for (const stockage of [null, '{', JSON.stringify({ serveur: 'javascript:alert(1)', prenom: 42 })]) {
+    const { plugin, rendu } = charger({}, { localStorage: { getItem() { if (stockage === null) throw Error('stockage indisponible'); return stockage; }, setItem() { throw Error('stockage indisponible'); } } });
+    await plugin.onload(); plugin.ruban.callback();
+    assert.equal(rendu.modal.reglages.form.serveur, '');
+    const formulaire = rendu.modal.reglages.form;
+    formulaire.invitation = 'https://cordee.example/rejoindre/ABCD-EFGH-JKLM'; formulaire.prenom = 'Membre test';
+    let destination;
+    plugin.rejoindreOuCreer = async (route, corps, serveur) => { destination = serveur; };
+    await rendu.boutons.get('Rejoindre')();
+    assert.equal(destination, 'https://cordee.example');
+    assert.doesNotThrow(() => plugin.memoriserPreferences());
+  }
 });
 
 test('une invitation ouvre le formulaire sans rejoindre ni remplacer un coffre existant', async () => {
@@ -293,4 +341,86 @@ test('la pause commandée hors du panneau actualise son bouton sans effacer les 
   await rendu.boutons.get('Reprendre')();
   assert.equal(plugin.etat.enPause, false);
   assert.equal(rendu.boutons.has('Mettre en pause'), true);
+});
+
+test('renommer le profil conserve la photo sélectionnée sans la partager automatiquement', async () => {
+  const { navigateur } = navigateurPhoto();
+  const { plugin, rendu } = charger(ETAT_TEST, navigateur); await plugin.onload();
+  const ecritures = []; let preferences = 0, affichages = 0;
+  plugin.memoriserPreferences = async () => { preferences++; };
+  const afficher = plugin.afficher.bind(plugin); plugin.afficher = () => { affichages++; afficher(); };
+  plugin.moteur.api = async (methode, route, corps) => {
+    if (methode === 'GET') return { json: async () => INFO_TEST };
+    ecritures.push(JSON.parse(JSON.stringify(corps)));
+    return { json: async () => ({ id: 'm1', nom: corps.nom || 'Ancien nom retourné par une réponse photo', avatar: corps.avatar ?? JPEG_TEST }) };
+  };
+  plugin.ruban.callback(); await rendu.boutons.get('Mon profil')();
+  const champ = rendu.champs.find((entree) => entree.nom === 'Nom affiché').champ;
+  assert.equal(champ.value, 'Membre test');
+  const photo = rendu.elements.find((element) => element.attrs.type === 'file');
+  photo.files = [fichierPhoto()]; await photo.onchange();
+  champ.change('  Nouveau nom  ');
+  assert.equal(ecritures.length, 0);
+  await rendu.boutons.get('Enregistrer le nom')();
+  assert.deepEqual(ecritures, [{ nom: 'Nouveau nom' }]);
+  assert.equal(plugin.etat.prenom, 'Nouveau nom');
+  assert.equal(rendu.sauvegarde.prenom, 'Nouveau nom');
+  assert.equal(champ.value, 'Nouveau nom'); assert.equal(preferences, 1); assert.equal(affichages, 1);
+  assert.ok(rendu.elements.some((element) => element.attrs.attr?.alt === 'Photo de Nouveau nom'));
+  await rendu.boutons.get('Enregistrer la photo')();
+  assert.deepEqual(ecritures[1], { avatar: JPEG_TEST });
+  assert.equal(plugin.etat.prenom, 'Nouveau nom');
+});
+
+test('un nom vide ou trop long est refusé localement et un refus serveur conserve le nom', async () => {
+  const { plugin, rendu } = charger(ETAT_TEST); await plugin.onload();
+  let ecritures = 0, statut = 400;
+  plugin.moteur.api = async (methode) => {
+    if (methode === 'GET') return { json: async () => INFO_TEST };
+    ecritures++; const erreur = new Error('Refus'); erreur.statut = statut; throw erreur;
+  };
+  plugin.ruban.callback(); await rendu.boutons.get('Mon profil')();
+  const champ = rendu.champs.find((entree) => entree.nom === 'Nom affiché').champ;
+  for (const nom of ['   ', 'x'.repeat(61)]) {
+    champ.change(nom); await rendu.boutons.get('Enregistrer le nom')();
+    assert.ok(rendu.textes.some((texte) => texte.includes('de 1 à 60 caractères')));
+  }
+  assert.equal(ecritures, 0);
+  champ.change('Nom valide'); await rendu.boutons.get('Enregistrer le nom')();
+  assert.equal(ecritures, 1); assert.equal(plugin.etat.prenom, ETAT_TEST.prenom);
+  assert.ok(rendu.textes.some((texte) => texte.includes('Nom refusé par le serveur')));
+  statut = 403; await rendu.boutons.get('Enregistrer le nom')();
+  assert.equal(plugin.etat.prenom, ETAT_TEST.prenom);
+  assert.ok(rendu.textes.some((texte) => texte.includes('Accès refusé')));
+});
+
+test('un nom confirmé par le serveur reste en mémoire si sa sauvegarde locale échoue', async () => {
+  const { plugin, rendu } = charger(ETAT_TEST); await plugin.onload();
+  let preferences = 0;
+  plugin.memoriserPreferences = async () => { preferences++; };
+  plugin.saveData = async () => { throw new Error('disque indisponible'); };
+  plugin.moteur.api = async (methode) => ({ json: async () => methode === 'GET' ? INFO_TEST : { id: 'm1', nom: 'Nom confirmé', avatar: JPEG_TEST } });
+  plugin.ruban.callback(); await rendu.boutons.get('Mon profil')();
+  const champ = rendu.champs.find((entree) => entree.nom === 'Nom affiché').champ;
+  champ.change('Nom confirmé'); await rendu.boutons.get('Enregistrer le nom')();
+  assert.equal(plugin.etat.prenom, 'Nom confirmé'); assert.equal(champ.value, 'Nom confirmé'); assert.equal(preferences, 1);
+  assert.ok(rendu.textes.some((texte) => texte.includes('Nom mis à jour sur le serveur') && texte.includes('sauvegarde locale a échoué')));
+  assert.equal(rendu.textes.some((texte) => texte.includes('Nom non enregistré')), false);
+});
+
+test('fermer pendant un renommage conserve le succès pour le même coffre sans recréer le panneau', async () => {
+  for (const changerCoffre of [false, true]) {
+    const { plugin, rendu } = charger(ETAT_TEST); await plugin.onload();
+    let terminer; plugin.memoriserPreferences = async () => {};
+    plugin.moteur.api = async (methode) => methode === 'GET' ? { json: async () => INFO_TEST } : new Promise((resolve) => { terminer = resolve; });
+    plugin.ruban.callback(); await rendu.boutons.get('Mon profil')();
+    rendu.champs.find((entree) => entree.nom === 'Nom affiché').champ.change('Nom en cours');
+    const renommage = rendu.boutons.get('Enregistrer le nom')();
+    rendu.modal.onClose();
+    if (changerCoffre) plugin.etat.coffreId = 'autre';
+    terminer({ json: async () => ({ id: 'm1', nom: 'Nom en cours', avatar: JPEG_TEST }) });
+    await renommage;
+    assert.equal(plugin.etat.prenom, changerCoffre ? ETAT_TEST.prenom : 'Nom en cours');
+    assert.equal(rendu.modal.contentEl.enfants.length, 0); assert.equal(rendu.boutons.has('Enregistrer le nom'), false);
+  }
 });

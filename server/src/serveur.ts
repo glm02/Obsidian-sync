@@ -230,9 +230,18 @@ export function creerServeur(opts: Options) {
 
       if (m === 'PUT' && sous === '/profil') {
         const b = await lireJson(req);
-        const avatar = avatarValide(b?.avatar);
-        db.prepare('UPDATE membres SET avatar = ? WHERE id = ? AND coffre_id = ?').run(avatar, moi.id, coffreId);
-        return envoyer(res, 200, { id: moi.id, nom: moi.nom, avatar });
+        if (!b || typeof b !== 'object' || Array.isArray(b)) throw new ErreurHttp(400, 'Indique un nom ou une photo de profil.');
+        const changerNom = Object.hasOwn(b, 'nom');
+        const changerAvatar = Object.hasOwn(b, 'avatar');
+        if (!changerNom && !changerAvatar) throw new ErreurHttp(400, 'Indique un nom ou une photo de profil.');
+        // Tout valider avant l'écriture : une photo incorrecte ne doit pas changer le nom, ni l'inverse.
+        const nom = changerNom ? nomValide(b.nom, 'Nom du profil') : null;
+        const avatar = changerAvatar ? avatarValide(b.avatar) : null;
+        const profil = db.prepare(`UPDATE membres SET nom = CASE WHEN ? THEN ? ELSE nom END,
+          avatar = CASE WHEN ? THEN ? ELSE avatar END WHERE id = ? AND coffre_id = ? AND revoque = 0 RETURNING id, nom, avatar`)
+          .get(changerNom ? 1 : 0, nom, changerAvatar ? 1 : 0, avatar, moi.id, coffreId);
+        if (!profil) throw new ErreurHttp(403, "Tu n'as plus accès à ce coffre.");
+        return envoyer(res, 200, profil);
       }
 
       if (m === 'POST' && sous === '/invitations') {

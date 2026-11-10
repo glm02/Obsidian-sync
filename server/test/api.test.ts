@@ -196,6 +196,52 @@ test('les photos refusent les URL, SVG, faux formats, base64 ambigu et fichiers 
   } finally { await s.arreter(); }
 });
 
+test('le nom et la photo de son profil se modifient séparément ou ensemble sans écriture partielle', async () => {
+  const s = await demarrer();
+  try {
+    const a = (await s.appel('POST', '/api/coffres', { nom: 'Profils', prenom: 'Alice', codeCreation: CODE })).json;
+    const autre = (await s.appel('POST', '/api/coffres', { nom: 'Autre', prenom: 'Camille', codeCreation: CODE })).json;
+    const coffre = `/api/coffres/${a.coffreId}`;
+    const route = coffre + '/profil';
+    const inv = (await s.appel('POST', coffre + '/invitations', {}, a.jeton)).json;
+    const ami = (await s.appel('POST', '/api/rejoindre', { code: inv.code, prenom: 'Bob' })).json;
+    const info = (await s.appel('GET', coffre, undefined, a.jeton)).json;
+    const id = info.moiId;
+    const bobId = info.membres.find((m: { nom: string }) => m.nom === 'Bob').id;
+    const lire = async () => (await s.appel('GET', coffre, undefined, a.jeton)).json;
+    const profilAttendu = (nom: string, avatar: string | null) => ({ id, nom, avatar });
+    assert.equal((await s.appel('PUT', route, { nom: 'Autre nom' })).statut, 401);
+    assert.equal((await s.appel('PUT', route, { nom: 'Autre nom' }, autre.jeton)).statut, 403);
+
+    assert.deepEqual((await s.appel('PUT', route, { avatar: PNG }, a.jeton)).json, profilAttendu('Alice', PNG));
+    const contenu = 'Un changement avant renommage';
+    const hash = sha(contenu);
+    await fetch(`${s.url}${coffre}/blobs/${hash}`, { method: 'PUT', body: contenu, headers: { Authorization: 'Bearer ' + a.jeton } });
+    await s.appel('POST', coffre + '/fichiers', { chemin: 'note.md', hash, base: null }, a.jeton);
+    assert.deepEqual((await s.appel('PUT', route, { nom: '  Alex  ', id: bobId }, a.jeton)).json, profilAttendu('Alex', PNG));
+    let membres = await lire();
+    assert.equal(membres.moi, 'Alex');
+    assert.equal(membres.membres.find((m: { id: string }) => m.id === bobId).nom, 'Bob');
+    const changement = (await s.appel('GET', coffre + '/changements', undefined, ami.jeton)).json.changements[0];
+    assert.equal(changement.auteur, 'Alex');
+    assert.equal(changement.auteurId, id);
+    assert.deepEqual((await s.appel('PUT', route, { avatar: JPEG }, a.jeton)).json, profilAttendu('Alex', JPEG));
+    assert.deepEqual((await s.appel('PUT', route, { nom: '  Sam  ', avatar: WEBP }, a.jeton)).json, profilAttendu('Sam', WEBP));
+
+    for (const corps of [{}, { id: bobId }, null, [], { nom: '' }, { nom: '   ' }, { nom: null }, { nom: 42 }, { nom: 'a'.repeat(61) },
+      { nom: '', avatar: PNG }, { nom: 'Nom refuse', avatar: 'https://example.test/photo.jpg' }]) {
+      assert.equal((await s.appel('PUT', route, corps, a.jeton)).statut, 400, JSON.stringify(corps));
+      membres = await lire();
+      assert.equal(membres.moi, 'Sam');
+      assert.equal(membres.membres.find((m: { id: string }) => m.id === id).avatar, WEBP);
+    }
+    assert.deepEqual((await s.appel('PUT', route, { nom: 'a'.repeat(60) }, a.jeton)).json, profilAttendu('a'.repeat(60), WEBP));
+    assert.deepEqual((await s.appel('PUT', route, { nom: 'Z', avatar: null }, a.jeton)).json, profilAttendu('Z', null));
+    await s.appel('DELETE', coffre + '/membres/moi', undefined, a.jeton);
+    assert.equal((await s.appel('PUT', route, { nom: 'Interdit' }, a.jeton)).statut, 403);
+  } finally { await s.arreter(); }
+});
+
 test('la migration des anciens membres préserve les jetons et les photos après redémarrage', async () => {
   const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'cordee-migration-profils-'));
   const base = path.join(dossier, 'cordee.db');
