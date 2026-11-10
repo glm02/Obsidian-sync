@@ -15,6 +15,8 @@ function charger(etat) {
       addSettingTab(tab) { this.onglet = tab; }
       addRibbonIcon(id, label, callback) { this.ruban = { id, label, callback }; }
       addCommand() {}
+      registerObsidianProtocolHandler(action, callback) { this.protocole = { action, callback }; }
+      registerInterval(callback) { this.intervalle = callback; }
     },
     PluginSettingTab: class { constructor(app) { this.app = app; this.containerEl = container(); } },
     Modal: class { constructor(app) { this.app = app; this.contentEl = container(); } open() { rendu.ouvertures++; this.onOpen(); } },
@@ -29,8 +31,9 @@ function charger(etat) {
       }
     },
     addIcon(id, svg) { rendu.icone = { id, svg }; },
+    Notice: class { constructor(text) { rendu.notice = text; } },
   };
-  const context = { require: () => obsidian, module: { exports: {} }, TextEncoder, TextDecoder, clearTimeout };
+  const context = { require: () => obsidian, module: { exports: {} }, TextEncoder, TextDecoder, clearTimeout, URL, URLSearchParams, window: { setInterval: callback => callback } };
   vm.runInNewContext(readFileSync(new URL('../main.js', import.meta.url), 'utf8'), context);
   return { plugin: new context.module.exports(), rendu };
 }
@@ -53,4 +56,32 @@ test('le logo ouvre le partage connecté et conserve le formulaire après décon
   assert.ok(rendu.boutons.has('Rejoindre'));
   plugin.onglet.display();
   assert.ok(rendu.boutons.has('Créer et partager'));
+});
+
+test('une invitation ouvre le formulaire sans rejoindre ni remplacer un coffre existant', async () => {
+  const { plugin, rendu } = charger({});
+  await plugin.onload();
+  plugin.rejoindreOuCreer = () => assert.fail('Un lien ne doit pas rejoindre automatiquement');
+  plugin.protocole.callback({ serveur: 'https://cordee.example', code: 'ABCD-EFGH-JKLM' });
+  assert.equal(rendu.ouvertures, 1);
+  assert.ok(rendu.boutons.has('Rejoindre'));
+  plugin.protocole.callback({ serveur: 'javascript:alert(1)', code: 'ABCD' });
+  assert.equal(rendu.ouvertures, 1);
+  Object.assign(plugin.etat, { serveur: 'https://cordee.example', coffreId: 'existant', jeton: 'test-token' });
+  plugin.protocole.callback({ serveur: 'https://autre.example', code: 'ABCD' });
+  assert.equal(plugin.etat.coffreId, 'existant');
+});
+
+test('les changements distants sont vérifiés sans flux fetch, puis arrêtés au déchargement', async () => {
+  const { plugin } = charger({ serveur: 'https://cordee.example', coffreId: 'test', jeton: 'test-token', derniereRev: 3 });
+  await plugin.onload();
+  let synchros = 0;
+  plugin.moteur.api = async () => ({ json: async () => ({ rev: 4 }) });
+  plugin.lancer = async () => { synchros++; };
+  plugin.ecouter();
+  await plugin.intervalle();
+  assert.equal(synchros, 1);
+  plugin.onunload();
+  await plugin.intervalle();
+  assert.equal(synchros, 1);
 });

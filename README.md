@@ -1,5 +1,9 @@
 # Obsidian-sync (Cordée)
 
+**Cordee** shares an Obsidian vault with friends using your own server. Install the beta with [BRAT](https://obsidian.md/plugins?id=obsidian42-brat), add `glm02/Obsidian-sync`, then open an invitation and choose a display name. Official directory submission is being prepared; Cordee is not listed yet.
+
+**Privacy and network use:** the plugin contacts only the server you choose after you explicitly create or join a shared vault. Notes, attachments, file paths, display names and change history are sent to that server. The host can read them; there is no end-to-end encryption in version 0.1. Excluded folders and Obsidian settings are not shared. There is no client analytics, advertising, payment or external account requirement. Data outside the open vault is not accessed. Access tokens are stored locally in the plugin's `data.json`; keep `.obsidian/` out of public repositories. The server retains file versions until its operator removes them. See [the publication report](docs/publication.md) for tested platforms and current limits.
+
 Partage un coffre Obsidian avec tes amis, sur ton propre serveur. Gratuit, auto-hébergé, sans compte GitHub, et ça marche sur téléphone.
 
 - Les modifications arrivent chez les autres en quelques secondes.
@@ -58,11 +62,24 @@ Mets toujours le serveur derrière HTTPS : les jetons passent dans les en-têtes
 
 ## Installer l'extension
 
-En attendant sa publication dans le catalogue d'Obsidian :
+### Sans télécharger les fichiers un par un
+
+Cordée n’est pas encore publiée dans le catalogue officiel. En attendant :
+
+1. Ouvre de préférence un coffre vide pour rejoindre tes amis.
+2. Dans les modules complémentaires d’Obsidian, installe et active **BRAT**.
+3. Dans BRAT, choisis **Add a beta plugin**, colle `glm02/Obsidian-sync`, puis confirme l’installation et active **Cordee**.
+4. Rouvre ton invitation sur le site et clique sur **Ouvrir dans Obsidian**. Ajoute ton prénom et confirme **Rejoindre**.
+
+BRAT installe les fichiers et gère les mises à jour. Le nom du catalogue est **Cordee** sans accent, conformément au format du catalogue ; l’interface conserve la marque Cordée.
+
+### Installation manuelle de secours
+
+Télécharge [cordee.zip](https://github.com/glm02/Obsidian-sync/releases/latest/download/cordee.zip), décompresse le dossier `cordee` dans `.obsidian/plugins/`, puis active Cordee. Tu peux aussi copier les fichiers :
 
 1. Dans ton coffre, crée le dossier `.obsidian/plugins/cordee/`.
 2. Copies-y `plugin/manifest.json` et `plugin/main.js`.
-3. Obsidian → Réglages → Extensions communautaires → active **Cordée**.
+3. Obsidian → Réglages → Extensions communautaires → active **Cordee**.
 
 Le logo Cordée apparaît dans la barre de gauche. Clique dessus pour ouvrir le panneau de partage, créer une invitation ou synchroniser. Le même panneau reste accessible dans les réglages et par la commande « Cordée : Ouvrir le panneau de partage ».
 
@@ -80,6 +97,8 @@ npm test
 ```
 
 Les tests couvrent l'API, la fusion des notes et une synchro de bout en bout entre deux coffres simulés.
+
+Pour préparer une release compatible Obsidian et BRAT : `python scripts/prepare_release.py`. Les fichiers sont produits dans `dist/<version>/`, ignoré par Git. Le manifeste à la racine et sa copie dans `plugin/` doivent rester identiques. Le tag GitHub doit correspondre exactement à leur version, sans préfixe `v`.
 
 ## Licence
 

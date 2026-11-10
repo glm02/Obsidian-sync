@@ -3,3 +3,4 @@ donnees/
 server/donnees/
 .env
 *.local.json
+/dist/

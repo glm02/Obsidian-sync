@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseInvitation } from "../src/lib/invitation.ts";
+import { parseInvitation, obsidianInvitationUrl } from "../src/lib/invitation.ts";
 
 test("lit le serveur encodé et conserve le code", () => {
   assert.deepEqual(parseInvitation("#serveur=https%3A%2F%2Fcordee.exemple.fr&code=ABCD-EFGH-JKLM"), {
@@ -9,6 +9,14 @@ test("lit le serveur encodé et conserve le code", () => {
   assert.deepEqual(parseInvitation("#serveur=http%3A%2F%2F203.0.113.10%3A8787&code=A"), {
     serveur: "http://203.0.113.10:8787", code: "A",
   });
+});
+
+test("le lien ouvre Obsidian avec les paramètres encodés, sans passer par une requête web", () => {
+  const url = new URL(obsidianInvitationUrl({ serveur: "https://cordee.exemple.fr", code: "ABCD-EFGH-JKLM" }));
+  assert.equal(url.protocol, "obsidian:");
+  assert.equal(url.hostname, "cordee");
+  assert.equal(url.searchParams.get("serveur"), "https://cordee.exemple.fr");
+  assert.equal(url.searchParams.get("code"), "ABCD-EFGH-JKLM");
 });
 
 test("rejette les invitations absentes, ambiguës ou malformées", () => {

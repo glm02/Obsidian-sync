@@ -1,9 +1,9 @@
 {
   "id": "cordee",
-  "name": "Cordée",
-  "version": "0.1.1",
+  "name": "Cordee",
+  "version": "0.1.2",
   "minAppVersion": "1.4.0",
-  "description": "Partage un coffre avec tes amis via ton propre serveur, gratuit et auto-hébergé. Les notes modifiées des deux côtés sont fusionnées.",
+  "description": "Share a vault with friends on your own server, with automatic sync and conflict-aware note merging.",
   "author": "Les contributeurs de Cordée",
   "isDesktopOnly": false
 }

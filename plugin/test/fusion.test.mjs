@@ -55,5 +55,14 @@ test("le lien de la page d'invitation donne le serveur et le code", () => {
   // L'ancien format reste accepté.
   assert.deepEqual(lireInvitation('https://cordee.exemple.fr/rejoindre/ABCD-EFGH-JKLM', ''), { serveur: 'https://cordee.exemple.fr', code: 'ABCD-EFGH-JKLM' });
   // Un serveur qui n'est pas une adresse web est refusé.
-  assert.notEqual(lireInvitation('https://cordee.vercel.app/rejoindre#serveur=javascript%3Aalert(1)&code=ABCD', '').serveur, 'javascript:alert(1)');
+  assert.equal(lireInvitation('https://cordee.vercel.app/rejoindre#serveur=javascript%3Aalert(1)&code=ABCD', ''), null);
+});
+
+test('les liens Obsidian sont acceptés sans accepter des identifiants ni des paramètres ambigus', () => {
+  assert.deepEqual(lireInvitation('obsidian://cordee?serveur=https%3A%2F%2Fcordee.exemple.fr&code=ABCD-EFGH-JKLM'), { serveur: 'https://cordee.exemple.fr', code: 'ABCD-EFGH-JKLM' });
+  for (const lien of [
+    'obsidian://cordee?serveur=https://agent-local:secret@cordee.exemple.fr&code=ABCD',
+    'obsidian://cordee?serveur=https://cordee.exemple.fr&code=A&code=B',
+    'obsidian://cordee?serveur=https://cordee.exemple.fr&code=',
+  ]) assert.equal(lireInvitation(lien), null);
 });
