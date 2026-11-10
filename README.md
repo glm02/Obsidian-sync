@@ -1,4 +1,4 @@
-# Cordée
+# Obsidian-sync (Cordée)
 
 Partage un coffre Obsidian avec tes amis, sur ton propre serveur. Gratuit, auto-hébergé, sans compte GitHub, et ça marche sur téléphone.
 
