@@ -112,3 +112,16 @@ test('le garde-fou bloque la disparition massive de fichiers', async () => {
     await srv.arreter();
   }
 });
+
+test('un fichier trop gros est signalé sans lire son contenu ni supprimer sa version distante', async () => {
+  const signaux: string[] = [];
+  const etat = { serveur: 'https://cordee.example', coffreId: 'test', jeton: 'test-token', bases: { 'grand.pdf': 'version-distante' }, cache: {} };
+  const interdit = async () => { assert.fail('Aucune lecture ou requête attendue'); };
+  const m = new Moteur({ etat, http: interdit, fichiers: {
+    lister: () => [{ chemin: 'grand.pdf', taille: 51 * 1024 * 1024, mtime: 1 }],
+    lire: interdit,
+  }, signaler: (q: string) => signaux.push(q) });
+  await m.envoyer();
+  assert.deepEqual(signaux, ['fichier-trop-gros']);
+  assert.equal(etat.bases['grand.pdf'], 'version-distante');
+});

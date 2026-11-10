@@ -25,15 +25,18 @@ Cordée garde les bonnes idées (fusion des notes ligne à ligne, copie de confl
 | Coffres multiples | Un serveur héberge autant de coffres que voulu. Créer un coffre demande le code de création de l'hébergeur. |
 | Invitations | Lien `https://serveur/rejoindre/ABCD-EFGH-JKLM`, valable 7 jours, 5 personnes. Code lisible, sans 0/O ni 1/I. |
 | Synchro automatique | À chaque modification (après 2 s de calme), à l'ouverture, et toutes les 5 min par sécurité. |
-| Temps quasi réel | Le serveur annonce chaque changement (flux d'événements) : les autres le récupèrent en quelques secondes. |
+| Pause/reprise | Les automatismes peuvent être suspendus, avec conservation du choix. La synchronisation manuelle reste disponible. |
+| État de la synchro | Dernière synchronisation réussie, fichiers partagés et erreurs utiles dans le panneau. |
+| Temps quasi réel | L’extension vérifie les révisions distantes toutes les 2,5 s via `requestUrl` ; le serveur propose aussi un flux d’événements. |
 | Fusion des notes | `.md`, `.txt`, `.csv` modifiés des deux côtés : fusion à trois versions, ligne à ligne. Même ligne modifiée différemment : les deux versions sont gardées à la suite, avec une notification. |
 | Fichiers binaires | Image ou PDF modifié des deux côtés : la version de l'autre prend la place, la tienne est gardée en « (conflit Prénom date) ». |
 | Suppressions | Un fichier supprimé par un ami part dans la corbeille locale du coffre (`.trash`), donc récupérable. |
 | Garde-fou | Si plus de la moitié du coffre (et plus de 20 fichiers) disparaît d'un coup, rien n'est supprimé sur le serveur. |
-| Activité | Commande « Voir qui a modifié quoi » : membres et 40 derniers changements. |
-| Dossiers privés | Réglage « Dossiers non partagés ». Les réglages Obsidian (`.obsidian/`) ne sont jamais partagés. |
+| Activité | Membres et 40 derniers changements, depuis le panneau ou la palette de commandes. |
+| Photos de profil | Photo choisie et confirmée par la personne, visible par les membres du même groupe. Les changements sont associés à l’identifiant de leur auteur. |
+| Dossiers privés | Réglage « Dossiers non partagés ». Le dossier de configuration indiqué par `Vault.configDir` n’est jamais partagé. |
 | Historique | Le serveur garde toutes les versions. La restauration depuis l'extension viendra en 0.2. |
-| Mobile | L'extension n'utilise que l'API d'Obsidian (`requestUrl`, `vault`) : elle fonctionne sur Android et iOS. |
+| Mobile | L'extension utilise les API Obsidian et Web, sans module Node/Electron. Les appareils Android et iOS physiques restent à valider. |
 
 ### Feuille de route
 

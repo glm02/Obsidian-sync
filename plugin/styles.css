@@ -1,0 +1,21 @@
+.cordee-etat {
+  padding: 12px 16px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-weight: var(--font-semibold);
+}
+.cordee-etat::first-letter { text-transform: uppercase; }
+.cordee-details { color: var(--text-muted); font-size: var(--font-small); }
+.cordee-attention { color: var(--text-warning, var(--text-normal)); }
+.cordee-activite { padding-inline-start: 20px; }
+.cordee-activite li { margin-block: 10px; overflow-wrap: anywhere; }
+.cordee-lien-invitation { width: 100%; }
+.cordee-personne, .cordee-profil-apercu { display: flex; align-items: center; gap: 12px; }
+.cordee-personne > div { min-width: 0; }
+.cordee-avatar { width: 36px; height: 36px; flex: 0 0 36px; border-radius: 50%; object-fit: cover; }
+.cordee-avatar-initiales { display: inline-flex; align-items: center; justify-content: center; background: var(--background-secondary-alt); color: var(--text-normal); font-size: var(--font-small); font-weight: var(--font-semibold); }
+.cordee-profil-apercu { margin-block: 16px; }
+.cordee-profil-apercu .cordee-avatar { width: 64px; height: 64px; flex-basis: 64px; }
+.cordee-choix-photo { display: block; width: 100%; max-width: 100%; margin-block: 8px 16px; }

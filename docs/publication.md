@@ -1,8 +1,16 @@
 # Publication de Cordee
 
+## Version 0.1.3
+
+Ajout du pilotage de la synchronisation (pause persistante, reprise et synchronisation ponctuelle), d’un état détaillé et de l’accès aux membres et à l’activité depuis le panneau. Les fichiers trop volumineux et les erreurs sont signalés. `styles.css` fait maintenant partie des pièces jointes et de l’archive, en plus de `main.js` et `manifest.json`.
+
+Les photos de profil sont enregistrées par groupe, après aperçu et confirmation. Le serveur ajoute une colonne nullable aux membres existants sans remplacer les jetons. L’activité expose l’identifiant de l’auteur et les photos sont chargées avec les membres ; le sondage des révisions reste léger. Mettre le serveur à jour pour activer les profils, après sauvegarde SQLite ; les anciennes extensions conservent le protocole de synchronisation existant.
+
+Les tests serveur/extension couvrent la pause sans requête réseau, la synchronisation manuelle pendant la pause, le retour arrière si la pause ne peut pas être enregistrée, la libération des abonnements d’affichage, la protection du dossier de configuration personnalisé et le signalement d’un fichier trop gros sans suppression de sa version distante. Les tests de profils couvrent l’accès au même coffre, le retrait, les formats, les limites de taille, l’attribution par identifiant et la migration d’une ancienne base avec conservation des jetons.
+
 ## État au 10 novembre 2026
 
-La [fiche publique officielle](https://community.obsidian.md/plugins/cordee) est publiée. La version 0.1.2, commit `f692cb2`, est soumise au contrôle automatique ; le dernier statut observé est **Pending**, avec le message « Your entry is live. An automated review is in progress. ». La fiche publique répond HTTP 200. Ceci ne signifie pas que l’installation depuis le catalogue est déjà approuvée. Le statut actuel se consulte dans le tableau de bord Obsidian Community.
+La [fiche publique officielle](https://community.obsidian.md/plugins/cordee) est publiée. Le rapport de la version 0.1.2, commit `f692cb2`, fourni par le propriétaire indique **Completed**, avec des recommandations et avertissements. La version 0.1.3 corrige le titre du README et protège explicitement le dossier de configuration via `Vault.configDir`. Les attestations de provenance GitHub restent à ajouter ; les fichiers ZIP et de sommes de contrôle servent à l’installation manuelle. Les alertes Tailwind portent sur le site, dont les styles ne sont pas distribués dans l’extension. Le statut d’installation dans le catalogue se vérifie séparément dans Obsidian.
 
 ## Candidat 0.1.2
 

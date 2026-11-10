@@ -36,6 +36,29 @@ const maintenant = () => Date.now();
 const identifiant = (n = 16) => randomBytes(n).toString('base64url');
 const ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // sans 0/O, 1/I/L : se lit et se dicte sans erreur
 const HASH_VALIDE = /^[a-f0-9]{64}$/;
+const TAILLE_MAX_AVATAR = 32 * 1024;
+
+function avatarValide(v: unknown): string | null {
+  if (v === null) return null;
+  if (typeof v !== 'string') throw new ErreurHttp(400, 'Choisis une photo PNG, JPEG ou WebP, ou retire-la avec null.');
+  const image = v.match(/^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/);
+  if (!image) throw new ErreurHttp(400, 'La photo doit être une image PNG, JPEG ou WebP encodée en base64.');
+  if (image[2].length > Math.ceil(TAILLE_MAX_AVATAR / 3) * 4) throw new ErreurHttp(413, 'La photo doit peser au plus 32 Ko.');
+  const octets = Buffer.from(image[2], 'base64');
+  if (octets.length > TAILLE_MAX_AVATAR) throw new ErreurHttp(413, 'La photo doit peser au plus 32 Ko.');
+  if (octets.toString('base64') !== image[2]) throw new ErreurHttp(400, 'Encodage base64 de la photo invalide.');
+  const png = octets.length >= 24 && octets.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+    && octets.toString('ascii', 12, 16) === 'IHDR';
+  const jpeg = octets.length >= 4 && octets[0] === 255 && octets[1] === 216 && octets[2] === 255
+    && octets[octets.length - 2] === 255 && octets[octets.length - 1] === 217;
+  const webp = octets.length >= 20 && octets.toString('ascii', 0, 4) === 'RIFF'
+    && octets.readUInt32LE(4) === octets.length - 8 && octets.toString('ascii', 8, 12) === 'WEBP'
+    && ['VP8 ', 'VP8L', 'VP8X'].includes(octets.toString('ascii', 12, 16));
+  if (!(image[1] === 'png' ? png : image[1] === 'jpeg' ? jpeg : webp)) {
+    throw new ErreurHttp(400, 'Le contenu de la photo ne correspond pas au format annoncé.');
+  }
+  return v;
+}
 
 function codeInvitation(): string {
   let s = '';
@@ -71,6 +94,9 @@ export function creerServeur(opts: Options) {
     CREATE TABLE IF NOT EXISTS changements (coffre_id TEXT NOT NULL, rev INTEGER NOT NULL, chemin TEXT NOT NULL, hash TEXT,
       supprime INTEGER NOT NULL, auteur TEXT NOT NULL, le INTEGER NOT NULL, PRIMARY KEY (coffre_id, rev));
   `);
+  // Migration additive : les coffres et les jetons des installations existantes restent valables.
+  const colonnesMembres = db.prepare('PRAGMA table_info(membres)').all() as Array<{ name: string }>;
+  if (!colonnesMembres.some((c) => c.name === 'avatar')) db.exec('ALTER TABLE membres ADD COLUMN avatar TEXT');
 
   function lienInvitation(code: string): string | null {
     if (!opts.urlPublique) return null;
@@ -196,8 +222,17 @@ export function creerServeur(opts: Options) {
       const coffre = db.prepare('SELECT id, nom, rev FROM coffres WHERE id = ?').get(coffreId) as { id: string; nom: string; rev: number };
 
       if (m === 'GET' && sous === '') {
-        const membres = db.prepare('SELECT nom, cree_le AS arrive_le FROM membres WHERE coffre_id = ? AND revoque = 0 ORDER BY cree_le').all(coffreId);
-        return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev, moi: moi.nom, membres });
+        // Le sondage fréquent de la synchronisation n'a pas besoin de télécharger les photos.
+        if (url.searchParams.get('revision') === '1') return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev });
+        const membres = db.prepare('SELECT id, nom, avatar, cree_le AS arrive_le FROM membres WHERE coffre_id = ? AND revoque = 0 ORDER BY cree_le').all(coffreId);
+        return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev, moi: moi.nom, moiId: moi.id, membres });
+      }
+
+      if (m === 'PUT' && sous === '/profil') {
+        const b = await lireJson(req);
+        const avatar = avatarValide(b?.avatar);
+        db.prepare('UPDATE membres SET avatar = ? WHERE id = ? AND coffre_id = ?').run(avatar, moi.id, coffreId);
+        return envoyer(res, 200, { id: moi.id, nom: moi.nom, avatar });
       }
 
       if (m === 'POST' && sous === '/invitations') {
@@ -216,7 +251,7 @@ export function creerServeur(opts: Options) {
 
       if (m === 'GET' && sous === '/changements') {
         const depuis = Math.max(0, Number(url.searchParams.get('depuis')) || 0);
-        const lignes = db.prepare(`SELECT c.rev, c.chemin, c.hash, c.supprime, c.le, mb.nom AS auteur FROM changements c
+        const lignes = db.prepare(`SELECT c.rev, c.chemin, c.hash, c.supprime, c.le, c.auteur AS auteurId, mb.nom AS auteur FROM changements c
           LEFT JOIN membres mb ON mb.id = c.auteur WHERE c.coffre_id = ? AND c.rev > ? ORDER BY c.rev LIMIT 1001`).all(coffreId, depuis) as Array<Record<string, unknown>>;
         const plus = lignes.length > 1000;
         const changements = lignes.slice(0, 1000).map((l) => ({ ...l, supprime: l.supprime === 1 }));

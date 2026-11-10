@@ -2,9 +2,19 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import type { AddressInfo } from 'node:net';
+import { DatabaseSync } from 'node:sqlite';
+import { creerServeur } from '../src/serveur.ts';
 import { demarrer, CODE } from './outils.ts';
 
 const sha = (s: string) => createHash('sha256').update(s).digest('hex');
+// Images artificielles d'un pixel, sans photographie ni métadonnée personnelle.
+const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aZ1sAAAAASUVORK5CYII=';
+const WEBP = 'data:image/webp;base64,UklGRjIAAABXRUJQVlA4ICYAAACQAQCdASoBAAEAAUAmJQBOl0AAhgAA/uJGvtTBJGUv+vgCniQAAA==';
+const JPEG = 'data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDQooor0jgP/9k=';
 let srv: Awaited<ReturnType<typeof demarrer>>;
 before(async () => { srv = await demarrer(); });
 after(async () => { await srv.arreter(); });
@@ -115,4 +125,106 @@ test("avec une page d'invitation, le lien y mène et porte le serveur après le 
   const inv = await s.appel('POST', `/api/coffres/${c.json.coffreId}/invitations`, {}, c.json.jeton);
   assert.equal(inv.json.lien, `https://cordee.vercel.app/rejoindre#serveur=${encodeURIComponent('https://cordee.test')}&code=${inv.json.code}`);
   await s.arreter();
+});
+
+test('les photos sont limitées à leur coffre et les changements gardent un auteur identifiable', async () => {
+  const s = await demarrer();
+  try {
+    const a = (await s.appel('POST', '/api/coffres', { nom: 'Photos', prenom: 'Alice', codeCreation: CODE })).json;
+    const b = (await s.appel('POST', '/api/coffres', { nom: 'Autre', prenom: 'Camille', codeCreation: CODE })).json;
+    const route = `/api/coffres/${a.coffreId}`;
+    const inv = (await s.appel('POST', route + '/invitations', {}, a.jeton)).json;
+    const ami = (await s.appel('POST', '/api/rejoindre', { code: inv.code, prenom: 'Bob' })).json;
+    const info = (await s.appel('GET', route, undefined, a.jeton)).json;
+    const aliceId = info.moiId;
+    const bob = info.membres.find((m: { nom: string }) => m.nom === 'Bob');
+    assert.equal(info.membres.find((m: { id: string }) => m.id === aliceId).avatar, null);
+    assert.notEqual(aliceId, bob.id);
+    assert.equal((await s.appel('PUT', route + '/profil', { avatar: PNG })).statut, 401);
+    assert.equal((await s.appel('PUT', `/api/coffres/${b.coffreId}/profil`, { avatar: PNG }, a.jeton)).statut, 403);
+    for (const avatar of [PNG, JPEG, WEBP]) {
+      const r = await s.appel('PUT', route + '/profil', { avatar, id: bob.id }, a.jeton);
+      assert.equal(r.statut, 200);
+      assert.deepEqual(r.json, { id: aliceId, nom: 'Alice', avatar });
+    }
+    let membres = (await s.appel('GET', route, undefined, ami.jeton)).json.membres;
+    assert.equal(membres.find((m: { id: string }) => m.id === aliceId).avatar, WEBP);
+    assert.equal(membres.find((m: { id: string }) => m.id === bob.id).avatar, null);
+    assert.equal((await s.appel('GET', route, undefined, b.jeton)).statut, 403);
+    assert.deepEqual((await s.appel('GET', route + '?revision=1', undefined, ami.jeton)).json,
+      { id: a.coffreId, nom: 'Photos', rev: 0 });
+    assert.equal((await s.appel('GET', route + '?revision=1', undefined, b.jeton)).statut, 403);
+
+    const contenu = 'Modification attribuee';
+    const hash = sha(contenu);
+    await fetch(`${s.url}${route}/blobs/${hash}`, { method: 'PUT', body: contenu, headers: { Authorization: 'Bearer ' + a.jeton } });
+    await s.appel('POST', route + '/fichiers', { chemin: 'note.md', hash, base: null }, a.jeton);
+    const changement = (await s.appel('GET', route + '/changements', undefined, ami.jeton)).json.changements[0];
+    assert.equal(changement.auteurId, aliceId);
+    assert.equal(changement.auteur, 'Alice');
+    assert.equal('avatar' in changement, false);
+    assert.equal((await s.appel('PUT', route + '/profil', { avatar: null }, a.jeton)).statut, 200);
+    membres = (await s.appel('GET', route, undefined, ami.jeton)).json.membres;
+    assert.equal(membres.find((m: { id: string }) => m.id === aliceId).avatar, null);
+    assert.equal((await s.appel('GET', route, undefined, ami.jeton)).json.rev, 1);
+    await s.appel('DELETE', route + '/membres/moi', undefined, a.jeton);
+    assert.equal((await s.appel('PUT', route + '/profil', { avatar: PNG }, a.jeton)).statut, 403);
+    const historique = (await s.appel('GET', route + '/changements', undefined, ami.jeton)).json.changements[0];
+    assert.equal(historique.auteurId, aliceId);
+    assert.equal(historique.auteur, 'Alice');
+  } finally { await s.arreter(); }
+});
+
+test('les photos refusent les URL, SVG, faux formats, base64 ambigu et fichiers trop volumineux', async () => {
+  const s = await demarrer();
+  try {
+    const a = (await s.appel('POST', '/api/coffres', { nom: 'Validation', prenom: 'Alice', codeCreation: CODE })).json;
+    const route = `/api/coffres/${a.coffreId}/profil`;
+    await s.appel('PUT', route, { avatar: PNG }, a.jeton);
+    const invalides = [undefined, '', 42, {}, 'https://example.test/photo.png',
+      'data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=', 'data:image/png;base64,SGVsbG8=',
+      PNG.replace('image/png', 'image/jpeg'), PNG.replace('base64,', 'base64,\n'),
+      PNG.replace(/=+$/, ''), PNG + '=', PNG.replace('II=', 'IJ=')];
+    for (const avatar of invalides) {
+      assert.equal((await s.appel('PUT', route, { avatar }, a.jeton)).statut, 400, String(avatar));
+    }
+    assert.equal((await s.appel('PUT', route, null, a.jeton)).statut, 400);
+    const gros = Buffer.alloc(32 * 1024 + 1); Buffer.from(PNG.split(',')[1], 'base64').copy(gros);
+    assert.equal((await s.appel('PUT', route, { avatar: 'data:image/png;base64,' + gros.toString('base64') }, a.jeton)).statut, 413);
+    const info = (await s.appel('GET', `/api/coffres/${a.coffreId}`, undefined, a.jeton)).json;
+    assert.equal(info.membres[0].avatar, PNG);
+  } finally { await s.arreter(); }
+});
+
+test('la migration des anciens membres préserve les jetons et les photos après redémarrage', async () => {
+  const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'cordee-migration-profils-'));
+  const base = path.join(dossier, 'cordee.db');
+  const ancien = new DatabaseSync(base);
+  ancien.exec(`CREATE TABLE coffres (id TEXT PRIMARY KEY, nom TEXT NOT NULL, rev INTEGER NOT NULL DEFAULT 0, cree_le INTEGER NOT NULL);
+    CREATE TABLE membres (id TEXT PRIMARY KEY, coffre_id TEXT NOT NULL, nom TEXT NOT NULL,
+      jeton_hash TEXT NOT NULL UNIQUE, cree_le INTEGER NOT NULL, revoque INTEGER NOT NULL DEFAULT 0);`);
+  ancien.prepare('INSERT INTO coffres VALUES (?, ?, ?, ?)').run('coffre-test', 'Ancien coffre', 7, 1);
+  ancien.prepare('INSERT INTO membres VALUES (?, ?, ?, ?, ?, ?)').run('membre-test', 'coffre-test', 'Alice', sha('jeton-fictif'), 1, 0);
+  ancien.close();
+  let instance: ReturnType<typeof creerServeur> | undefined;
+  try {
+    for (let tour = 0; tour < 2; tour++) {
+      instance = creerServeur({ dossierDonnees: dossier, codeCreation: CODE });
+      await new Promise<void>((ok) => instance!.serveur.listen(0, '127.0.0.1', () => ok()));
+      const url = `http://127.0.0.1:${(instance.serveur.address() as AddressInfo).port}/api/coffres/coffre-test`;
+      const headers = { Authorization: 'Bearer jeton-fictif', 'Content-Type': 'application/json' };
+      const info = await (await fetch(url, { headers })).json();
+      assert.equal(info.rev, 7);
+      assert.equal(info.moiId, 'membre-test');
+      assert.equal(info.membres[0].avatar, tour === 0 ? null : PNG);
+      if (tour === 0) assert.equal((await fetch(url + '/profil', { method: 'PUT', headers, body: JSON.stringify({ avatar: PNG }) })).status, 200);
+      const fermeture = new Promise<void>((ok) => instance!.serveur.once('close', () => ok()));
+      instance.fermer(); instance = undefined;
+      await fermeture;
+    }
+  } finally {
+    instance?.fermer();
+    assert.equal(path.dirname(path.resolve(dossier)), path.resolve(os.tmpdir()));
+    fs.rmSync(dossier, { recursive: true, force: true });
+  }
 });
