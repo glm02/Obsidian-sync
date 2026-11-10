@@ -1,0 +1,6 @@
+{$CORDEE_DOMAINE} {
+	# flush_interval -1 : les annonces de changements partent tout de suite, sans tampon.
+	reverse_proxy cordee:8787 {
+		flush_interval -1
+	}
+}

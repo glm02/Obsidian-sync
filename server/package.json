@@ -1,0 +1,13 @@
+{
+  "name": "cordee-serveur",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Serveur auto-hébergé de Cordée : partage de coffres Obsidian entre amis.",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/main.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test test/api.test.ts ../plugin/test/fusion.test.mjs test/synchro.test.ts"
+  },
+  "license": "MIT"
+}

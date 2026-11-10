@@ -1,0 +1,28 @@
+# Cordée + Caddy (HTTPS automatique). Configure CORDEE_DOMAINE dans .env.
+services:
+  cordee:
+    build: .
+    restart: unless-stopped
+    environment:
+      CORDEE_URL_PUBLIQUE: https://${CORDEE_DOMAINE}
+      CORDEE_TAILLE_MAX_MO: ${CORDEE_TAILLE_MAX_MO:-50}
+    volumes:
+      - cordee-donnees:/donnees
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CORDEE_DOMAINE: ${CORDEE_DOMAINE}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-donnees:/data
+    depends_on:
+      - cordee
+
+volumes:
+  cordee-donnees:
+  caddy-donnees:
