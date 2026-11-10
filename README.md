@@ -52,6 +52,7 @@ CORDEE_URL_PUBLIQUE=https://cordee.exemple.fr npm start
 | `CORDEE_URL_PUBLIQUE` | Adresse publique, pour fabriquer les liens d'invitation | aucune |
 | `CORDEE_TAILLE_MAX_MO` | Taille maximale d'un fichier | `50` |
 | `CORDEE_DERRIERE_PROXY` | `1` : lire l'adresse du visiteur dans `X-Real-IP` (posé par le proxy) | désactivé |
+| `CORDEE_PAGE_INVITATION` | Page d'invitation hébergée ailleurs (ex. `https://cordee.vercel.app/rejoindre`) : le lien devient `<page>#serveur=…&code=…`, le code ne quitte jamais le navigateur | aucune (lien vers le serveur) |
 
 Mets toujours le serveur derrière HTTPS : les jetons passent dans les en-têtes.
 

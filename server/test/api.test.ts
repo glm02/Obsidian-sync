@@ -108,3 +108,11 @@ test('derrière un proxy, chaque adresse a sa propre limite', async () => {
   assert.equal(await essai('203.0.113.2'), 404);
   await proxy.arreter();
 });
+
+test("avec une page d'invitation, le lien y mène et porte le serveur après le #", async () => {
+  const s = await demarrer({ pageInvitation: 'https://cordee.vercel.app/rejoindre' });
+  const c = await s.appel('POST', '/api/coffres', { nom: 'Groupe', prenom: 'Léa', codeCreation: CODE });
+  const inv = await s.appel('POST', `/api/coffres/${c.json.coffreId}/invitations`, {}, c.json.jeton);
+  assert.equal(inv.json.lien, `https://cordee.vercel.app/rejoindre#serveur=${encodeURIComponent('https://cordee.test')}&code=${inv.json.code}`);
+  await s.arreter();
+});

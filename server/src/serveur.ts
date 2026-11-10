@@ -18,6 +18,9 @@ export interface Options {
   // d'essais deviendrait commun à tout le monde, et un inconnu pourrait bloquer les autres.
   // Activé, on lit X-Real-IP, que le proxy doit écraser (jamais compléter) à chaque requête.
   derriereProxy?: boolean;
+  // Page d'invitation hébergée ailleurs (ex. le site de présentation sur Vercel). Le lien devient
+  // <page>#serveur=…&code=… : la page explique comment rejoindre, et ne reçoit jamais le code.
+  pageInvitation?: string;
 }
 
 class ErreurHttp extends Error {
@@ -68,6 +71,13 @@ export function creerServeur(opts: Options) {
     CREATE TABLE IF NOT EXISTS changements (coffre_id TEXT NOT NULL, rev INTEGER NOT NULL, chemin TEXT NOT NULL, hash TEXT,
       supprime INTEGER NOT NULL, auteur TEXT NOT NULL, le INTEGER NOT NULL, PRIMARY KEY (coffre_id, rev));
   `);
+
+  function lienInvitation(code: string): string | null {
+    if (!opts.urlPublique) return null;
+    const serveur = opts.urlPublique.replace(/\/$/, '');
+    if (opts.pageInvitation) return `${opts.pageInvitation}#serveur=${encodeURIComponent(serveur)}&code=${code}`;
+    return `${serveur}/rejoindre/${code}`;
+  }
 
   const codeCreationHash = sha256(opts.codeCreation);
   const abonnes = new Map<string, Set<http.ServerResponse>>();
@@ -195,7 +205,7 @@ export function creerServeur(opts: Options) {
         const expire = maintenant() + 7 * 24 * 3600_000;
         db.prepare('INSERT INTO invitations (code_hash, coffre_id, cree_par, expire_le, utilisations_restantes) VALUES (?, ?, ?, ?, 5)')
           .run(sha256(normaliserCode(code)), coffreId, moi.id, expire);
-        const lien = opts.urlPublique ? `${opts.urlPublique.replace(/\/$/, '')}/rejoindre/${code}` : null;
+        const lien = lienInvitation(code);
         return envoyer(res, 201, { code, lien, expireLe: expire, utilisations: 5 });
       }
 

@@ -48,3 +48,12 @@ test('lecture d\'un lien d\'invitation', () => {
 test('nom de copie en conflit garde l\'extension', () => {
   assert.match(nomCopieConflit('images/schema.png', 'Paul'), /^images\/schema \(conflit Paul .+\)\.png$/);
 });
+
+test("le lien de la page d'invitation donne le serveur et le code", () => {
+  const lien = 'https://cordee.vercel.app/rejoindre#serveur=' + encodeURIComponent('https://cordee.exemple.fr') + '&code=ABCD-EFGH-JKLM';
+  assert.deepEqual(lireInvitation(lien, ''), { serveur: 'https://cordee.exemple.fr', code: 'ABCD-EFGH-JKLM' });
+  // L'ancien format reste accepté.
+  assert.deepEqual(lireInvitation('https://cordee.exemple.fr/rejoindre/ABCD-EFGH-JKLM', ''), { serveur: 'https://cordee.exemple.fr', code: 'ABCD-EFGH-JKLM' });
+  // Un serveur qui n'est pas une adresse web est refusé.
+  assert.notEqual(lireInvitation('https://cordee.vercel.app/rejoindre#serveur=javascript%3Aalert(1)&code=ABCD', '').serveur, 'javascript:alert(1)');
+});

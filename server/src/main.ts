@@ -24,5 +24,6 @@ const { serveur } = creerServeur({
   tailleMaxOctets: Number(process.env.CORDEE_TAILLE_MAX_MO || 50) * 1024 * 1024,
   urlPublique: process.env.CORDEE_URL_PUBLIQUE,
   derriereProxy: process.env.CORDEE_DERRIERE_PROXY === '1',
+  pageInvitation: process.env.CORDEE_PAGE_INVITATION || undefined,
 });
 serveur.listen(port, () => console.log(`Cordée écoute sur le port ${port}, données dans ${dossier}`));

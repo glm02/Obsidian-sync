@@ -81,9 +81,19 @@ function nomCopieConflit(chemin, qui) {
   return point > slash ? chemin.slice(0, point) + avec + chemin.slice(point) : chemin + avec;
 }
 
-// Accepte « https://serveur/rejoindre/ABCD-EFGH-JKLM » ou un code seul.
+// Accepte « https://serveur/rejoindre/ABCD-EFGH-JKLM », un lien de la page d'invitation
+// « https://site/rejoindre#serveur=<adresse encodée>&code=ABCD-EFGH-JKLM », ou un code seul.
+// Dans ce second format, le serveur et le code sont après le « # » : le navigateur ne les
+// envoie jamais au site qui héberge la page.
 function lireInvitation(texte, serveurParDefaut) {
   const t = String(texte || '').trim();
+  const diese = t.indexOf('#');
+  if (/^https?:\/\//.test(t) && diese > 0) {
+    const params = new URLSearchParams(t.slice(diese + 1));
+    const serveur = (params.get('serveur') || '').replace(/\/+$/, '');
+    const code = params.get('code') || '';
+    if (/^https?:\/\/[^\s#]+$/.test(serveur) && /^[A-Za-z0-9-]{1,20}$/.test(code)) return { serveur, code };
+  }
   const m = t.match(/^(https?:\/\/.+?)\/rejoindre\/([A-Za-z0-9-]+)\/?$/);
   if (m) return { serveur: m[1], code: m[2] };
   return { serveur: serveurParDefaut, code: t };
