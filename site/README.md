@@ -1,6 +1,6 @@
 # Site Cordée
 
-Site de présentation Next.js (App Router, TypeScript), Tailwind CSS v4 et composants shadcn/ui adaptés. Aucun outil d’analytics ni traceur.
+Site de présentation Next.js (App Router, TypeScript), Tailwind CSS v4 et composants shadcn/ui adaptés. Mesure d’audience par Vercel Web Analytics (sans cookie), chargée par un script et non par un paquet npm, et désactivée sur `/rejoindre` dont l’adresse porte l’invitation. Aucun autre traceur.
 
 ## Local
 

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Footer, Header } from "@/components/site-chrome";
+import { Analytics } from "@/components/analytics";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import "./globals.css";
 
@@ -14,6 +15,6 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return <html lang="fr"><body className={`${geist.variable} ${mono.variable}`}>
-    <a className="skip-link" href="#contenu">Aller au contenu</a><Header />{children}<Footer /><ScrollReveal />
+    <a className="skip-link" href="#contenu">Aller au contenu</a><Header />{children}<Footer /><ScrollReveal /><Analytics />
   </body></html>;
 }

@@ -28,5 +28,6 @@ export function Footer() {
       <Link prefetch={false} href="/" aria-label="Cordée, accueil"><Logo /></Link>
       <div className="flex flex-wrap items-center gap-6"><Link prefetch={false} href="/installer">Installer</Link><Link prefetch={false} href="/deployer">Déployer</Link><Link prefetch={false} href="/guide">Guide</Link><a href={repository} className="flex items-center gap-2"><BrandLogo brand="github" className="size-3.5" />GitHub</a><a href={`${repository}/blob/main/LICENSE`}>MIT</a></div>
     </div>
+    <p className="shell pb-8 text-xs text-soft">Ce site compte ses visites avec Vercel Web Analytics, sans cookie et sans donnée personnelle, et jamais sur les pages d’invitation. Cordée lui-même n’envoie aucune télémétrie.</p>
   </footer>;
 }
