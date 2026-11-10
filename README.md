@@ -25,6 +25,16 @@ docker compose exec cordee cat /donnees/code-creation.txt   # le code pour crée
 
 Caddy obtient le certificat HTTPS tout seul. Les données sont dans le volume `cordee-donnees` : pour sauvegarder, copie-le.
 
+### Sur un VPS qui a déjà Caddy ou nginx
+
+Les ports 80/443 sont déjà pris : on lance Cordée seul, sur `127.0.0.1:8800`, et le proxy existant le publie.
+
+```sh
+CORDEE_DOMAINE=cordee.exemple.fr docker compose -f deploy/compose-proxy-existant.yml up -d --build
+```
+
+Bloc Caddy prêt à adapter : [deploy/cordee.caddy](deploy/cordee.caddy). Le proxy doit **écraser** l'en-tête `X-Real-IP` (`CORDEE_DERRIERE_PROXY=1`), sinon le limiteur d'essais est commun à tous les visiteurs.
+
 ### Sans Docker
 
 Node 22.18 ou plus récent, aucune installation de paquet :
@@ -41,6 +51,7 @@ CORDEE_URL_PUBLIQUE=https://cordee.exemple.fr npm start
 | `CORDEE_CODE_CREATION` | Code pour créer un coffre | généré dans `code-creation.txt` |
 | `CORDEE_URL_PUBLIQUE` | Adresse publique, pour fabriquer les liens d'invitation | aucune |
 | `CORDEE_TAILLE_MAX_MO` | Taille maximale d'un fichier | `50` |
+| `CORDEE_DERRIERE_PROXY` | `1` : lire l'adresse du visiteur dans `X-Real-IP` (posé par le proxy) | désactivé |
 
 Mets toujours le serveur derrière HTTPS : les jetons passent dans les en-têtes.
 

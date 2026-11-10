@@ -1,0 +1,23 @@
+# Variante pour un serveur qui a déjà un proxy HTTPS (Caddy, nginx) sur les ports 80/443.
+# Le Caddy du docker-compose.yml principal entrerait en conflit avec lui : ici, Cordée
+# écoute seulement sur 127.0.0.1, et c'est le proxy existant qui le publie.
+#   CORDEE_DOMAINE=cordee.exemple.fr docker compose -f deploy/compose-proxy-existant.yml up -d --build
+services:
+  cordee:
+    build: ..
+    container_name: cordee
+    restart: unless-stopped
+    environment:
+      CORDEE_URL_PUBLIQUE: https://${CORDEE_DOMAINE}
+      CORDEE_TAILLE_MAX_MO: ${CORDEE_TAILLE_MAX_MO:-50}
+      # Le proxy écrase X-Real-IP : le limiteur d'essais compte par vraie adresse.
+      CORDEE_DERRIERE_PROXY: "1"
+    ports:
+      - "127.0.0.1:${CORDEE_PORT_LOCAL:-8800}:8787"
+    volumes:
+      - cordee-donnees:/donnees
+    # Un groupe d'amis tient largement dans 128 Mo ; la limite protège le reste du serveur.
+    mem_limit: 256m
+
+volumes:
+  cordee-donnees:

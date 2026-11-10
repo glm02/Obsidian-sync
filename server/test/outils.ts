@@ -7,9 +7,9 @@ import { creerServeur } from '../src/serveur.ts';
 
 export const CODE = 'code-de-test';
 
-export async function demarrer() {
+export async function demarrer(extra: { derriereProxy?: boolean } = {}) {
   const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'cordee-'));
-  const s = creerServeur({ dossierDonnees: dossier, codeCreation: CODE, tailleMaxOctets: 1024 * 1024, urlPublique: 'https://cordee.test' });
+  const s = creerServeur({ dossierDonnees: dossier, codeCreation: CODE, tailleMaxOctets: 1024 * 1024, urlPublique: 'https://cordee.test', ...extra });
   await new Promise<void>((ok) => s.serveur.listen(0, '127.0.0.1', () => ok()));
   const url = `http://127.0.0.1:${(s.serveur.address() as AddressInfo).port}`;
   return {

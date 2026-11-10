@@ -14,6 +14,10 @@ export interface Options {
   codeCreation: string;
   tailleMaxOctets?: number;
   urlPublique?: string;
+  // Derrière un proxy (Caddy), toutes les requêtes arrivent de la même adresse : le limiteur
+  // d'essais deviendrait commun à tout le monde, et un inconnu pourrait bloquer les autres.
+  // Activé, on lit X-Real-IP, que le proxy doit écraser (jamais compléter) à chaque requête.
+  derriereProxy?: boolean;
 }
 
 class ErreurHttp extends Error {
@@ -133,7 +137,8 @@ export function creerServeur(opts: Options) {
     const url = new URL(req.url || '/', 'http://local');
     const p = url.pathname;
     const m = req.method || 'GET';
-    const ip = req.socket.remoteAddress || '';
+    const ipProxy = opts.derriereProxy ? req.headers['x-real-ip'] : undefined;
+    const ip = (typeof ipProxy === 'string' && ipProxy) || req.socket.remoteAddress || '';
     let r: RegExpMatchArray | null;
 
     if (m === 'GET' && p === '/api/sante') return envoyer(res, 200, { ok: true, version: 1 });

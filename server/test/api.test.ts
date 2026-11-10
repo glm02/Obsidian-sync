@@ -93,3 +93,18 @@ test('invitation inconnue refusée, et les essais en rafale sont limités', asyn
   for (let i = 0; i < 12; i++) dernier = (await srv.appel('POST', '/api/rejoindre', { code: 'AAAA-BBBB-CCCC', prenom: 'Intrus' })).statut;
   assert.equal(dernier, 429);
 });
+
+test('derrière un proxy, chaque adresse a sa propre limite', async () => {
+  const proxy = await demarrer({ derriereProxy: true });
+  const essai = (ip: string) => fetch(proxy.url + '/api/rejoindre', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Real-IP': ip },
+    body: JSON.stringify({ code: 'AAAA-BBBB-CCCC', prenom: 'Intrus' }),
+  }).then((r) => r.status);
+  let dernier = 0;
+  for (let i = 0; i < 12; i++) dernier = await essai('203.0.113.1');
+  assert.equal(dernier, 429);
+  // Un autre visiteur n'est pas bloqué par l'intrus.
+  assert.equal(await essai('203.0.113.2'), 404);
+  await proxy.arreter();
+});

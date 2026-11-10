@@ -1,0 +1,15 @@
+# Bloc de site pour un Caddy déjà installé (ex. /etc/caddy/sites/cordee.caddy).
+cordee.exemple.fr {
+	reverse_proxy 127.0.0.1:8800 {
+		# On remplace l'en-tête au lieu de le compléter : un client ne peut pas se faire passer pour une autre adresse.
+		header_up X-Real-IP {remote_host}
+		# Les annonces de changements (flux d'événements) partent tout de suite, sans tampon.
+		flush_interval -1
+	}
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "same-origin"
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}
