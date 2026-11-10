@@ -1,2 +1,3 @@
 /.tmp/
-/verification/
+/verification/*
+!/verification/rapport.md

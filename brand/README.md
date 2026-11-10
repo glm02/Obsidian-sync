@@ -1,9 +1,9 @@
 # Cordée
 
-Le « C d’attache » est une initiale continue, terminée par deux boucles égales.  
-Les boucles évoquent les personnes qui choisissent de se relier.  
-Le corps commun figure ce qu’elles construisent et partagent ensemble.  
-L’ouverture du C garde une impression d’accueil, sans enfermer le groupe.  
+Le « C d’attache » est une initiale continue, terminée par deux boucles égales.
+Les boucles évoquent les personnes qui choisissent de se relier.
+Le corps commun figure ce qu’elles construisent et partagent ensemble.
+L’ouverture du C garde une impression d’accueil, sans enfermer le groupe.
 Le mot « Cordée » est dessiné sur mesure, accent compris, entièrement en tracés.
 
 ## Fichiers
