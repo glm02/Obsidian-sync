@@ -270,3 +270,9 @@ textarea.cordee-geii-code:focus { outline: 1px solid var(--interactive-accent); 
 .cordee-geii-tableau table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
 .cordee-geii-tableau th, .cordee-geii-tableau td { padding: 6px 10px; border-bottom: 1px solid var(--background-modifier-border); text-align: start; overflow-wrap: anywhere; }
 .cordee-geii-tableau th { color: var(--text-muted); }
+/* ---------- Moodle ---------- */
+.cordee-moodle { margin-bottom: var(--size-4-6); }
+.cordee-moodle-cours { border-top: 1px solid var(--background-modifier-border); padding: var(--size-4-3) 0; }
+.cordee-moodle-cours > label { display: flex; align-items: center; gap: var(--size-4-2); color: var(--text-normal); }
+.cordee-moodle-cours input[type="checkbox"] { margin: 0; }
+/* ---------- Fin Moodle ---------- */
