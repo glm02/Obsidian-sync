@@ -1097,7 +1097,7 @@ test('Moodle : un jeton collé est masqué, enregistré, puis réutilisé par Te
 
 test('Moodle : connexion universitaire avec retour collé, sans mot de passe ni clé privée sauvegardés', async () => {
   const { plugin, rendu, obsidian } = charger({}, { crypto: webcrypto });
-  const token = 'b'.repeat(32), prive = 'c'.repeat(32);
+  const token = 'b'.repeat(32), prive = 'Ab9z'.repeat(16);
   const appels = [];
   obsidian.requestUrl = async (r) => {
     appels.push(r);
@@ -1114,7 +1114,7 @@ test('Moodle : connexion universitaire avec retour collé, sans mot de passe ni 
   assert.equal(new URL(ancre.attrs.attr.href).searchParams.get('urlscheme'), 'cordee-moodle');
   const champ = rendu.champs.find((c) => c.nom === 'Lien de retour Moodle').champ;
   assert.equal(champ.inputEl.type, 'password');
-  const lien = 'cordee-moodle://token=' + Buffer.from('a'.repeat(32) + ':::' + token + ':::' + prive).toString('base64');
+  const lien = 'moodlemobile://token=' + Buffer.from('a'.repeat(32) + ':::' + token + ':::' + prive).toString('base64');
   champ.inputEl.value = lien;
   await rendu.boutons.get('Terminer la connexion')();
   assert.equal(appels.length, 2);

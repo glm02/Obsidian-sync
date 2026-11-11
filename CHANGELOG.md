@@ -1,5 +1,9 @@
 # Nouveautés
 
+## 0.4.2
+
+- **Retour de connexion Moodle corrigé** : les liens de connexion contenant une clé privée alphanumérique de 64 caractères sont acceptés. Cette partie optionnelle reste ignorée ; seul le jeton de service web est enregistré. Les tests utilisent des clés fictives au format Moodle.
+
 ## 0.4.1
 
 - **Connexion universitaire Moodle** : parcours par navigateur pour les comptes dont les préférences n’affichent qu’une clé RSS. Après authentification sur le site de l’université, copier le lien « lancer l’application » dans la fenêtre de connexion Cordée. Le mot de passe reste sur le site ; seule la clé de service web est enregistrée localement. Le retour dans Cordée est manuel.

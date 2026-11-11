@@ -61,9 +61,9 @@ test('Moodle : connexion navigateur sur le site choisi avec un passeport aléato
 });
 
 test('Moodle : le retour mobile fournit uniquement le jeton public et refuse les liens étrangers ou abîmés', () => {
-  const id = 'a'.repeat(32), jeton = 'b'.repeat(32), prive = 'c'.repeat(32);
+  const id = 'a'.repeat(32), jeton = 'b'.repeat(32), prive = 'Ab9z'.repeat(16);
   for (const scheme of ['cordee-moodle', 'moodlemobile']) {
-    for (const contenu of [`${id}:::${jeton}`, `${id}:::${jeton}:::${prive}`]) {
+    for (const contenu of [`${id}:::${jeton}`, `${id}:::${jeton}:::${prive}`, `${id}:::${jeton}:::${'c'.repeat(32)}`]) {
       const lien = `${scheme}://token=${Buffer.from(contenu).toString('base64')}`;
       assert.equal(jetonDepuisLienMoodle(lien), jeton);
       assert.equal(jetonDepuisLienMoodle(lien.replace(/=+$/, (s) => encodeURIComponent(s))), jeton);

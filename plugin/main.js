@@ -423,7 +423,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.1';
+const VERSION = '0.4.2';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -2705,7 +2705,9 @@ function jetonDepuisLienMoodle(valeur) {
     const base64 = decodeURIComponent(lien[1]);
     if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) throw new Error();
     const parties = atob(base64).split(':::');
-    if (parties.length < 2 || parties.length > 3 || parties.some((p) => !/^[a-f0-9]{32}$/i.test(p))) throw new Error();
+    // Moodle peut ajouter une clé privée alphanumérique de 64 caractères.
+    // Seuls l’identifiant du site et le jeton utilisé par Cordée sont hexadécimaux.
+    if (parties.length < 2 || parties.length > 3 || parties.slice(0, 2).some((p) => !/^[a-f0-9]{32}$/i.test(p))) throw new Error();
     return parties[1]; // La troisième partie, clé privée de l’app mobile, n’est jamais conservée.
   } catch { throw new Error('Copie l’adresse complète du lien « lancer l’application » sur la page Moodle, puis colle-la ici.'); }
 }
