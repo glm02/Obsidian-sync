@@ -1,5 +1,12 @@
 # Nouveautés
 
+## 0.4.0
+
+- **Qui est là** : chaque membre apparaît « en ligne · sur sa note », sinon « vu il y a 12 min », « vu hier » ou « pas encore connecté ». Une notification « Bruno vient de se connecter » (au plus une fois par demi-heure, désactivable), un point vert dans la barre d’état. « Masquer ma présence » cache aussi la dernière visite.
+- **Le même agenda pour tous** : « Ajouter pour toute la cordée » écrit le lien de l’emploi du temps dans la note « Agenda de la cordée » ; chacun voit les mêmes cours. Un lien Moodle, personnel, reste refusé en partage.
+- **Moodle, au-delà du calendrier** : connexion par l’accès officiel de l’application Moodle (le mot de passe sert une fois, seul un jeton est gardé sur l’appareil). Choix des cours dont les fichiers (PDF de cours, TD, TP, sujets) arrivent dans le coffre, `Moodle/<cours>/<section>/`, nouveaux et modifiés seulement, toutes les 6 h ; un fichier retouché dans le coffre n’est jamais écrasé. Une note d’index et les 20 dernières annonces par cours. Les devoirs avec leur état (rendu / à rendre) dans la semaine et « Aujourd’hui ». « Mes notes Moodle » : affichées sur l’appareil seulement, jamais écrites dans le coffre partagé.
+- **Logiciels de GEII** : code Arduino, C (PIC), MATLAB, Python, VHDL, assembleur lisible et modifiable dans Obsidian, avec « Ouvrir dans le logiciel » ; schémas LTspice dessinés (lecture seule, zoom) ; schémas KiCad résumés (composants, valeurs, empreintes, feuilles) ; bloc ` ```calc ` dans les notes pour enchaîner des calculs avec préfixes (4.7k, 10µ…) et résultats en notation ingénieur, sans exécuter de code. Les fichiers LTspice et KiCad restent protégés des fusions ligne à ligne (copie de conflit).
+
 ## 0.3.0
 
 - **La semaine** : une vue calendrier (icône calendrier ou commande « Ouvrir la semaine ») avec ton emploi du temps, tes devoirs Moodle et l’agenda de la cordée. Grille avec les heures et le trait « maintenant » sur ordinateur, liste par jour sur téléphone. Semaine précédente / suivante, cours qui se chevauchent côte à côte.

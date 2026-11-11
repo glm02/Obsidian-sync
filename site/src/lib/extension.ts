@@ -3,17 +3,39 @@
  * Source : le code de plugin/main.js et CHANGELOG.md. À mettre à jour à chaque version
  * (la version doit suivre manifest.json, sinon le site annonce une version qui n'existe pas).
  */
-export const VERSION_EXTENSION = "0.3.0";
+export const VERSION_EXTENSION = "0.4.0";
 
 export type Fonction = { titre: string; texte: string };
 export type Groupe = { id: string; titre: string; resume: string; fonctions: Fonction[] };
 
 export const groupes: Groupe[] = [
   {
+    id: "moodle",
+    titre: "Moodle",
+    resume: "Tes cours arrivent tout seuls.",
+    fonctions: [
+      { titre: "Fichiers de cours", texte: "Choisis tes cours : PDF de cours, TD, TP et sujets arrivent dans le coffre, rangés par section, toutes les 6 h. Un fichier que tu as retouché n’est jamais écrasé." },
+      { titre: "Annonces et devoirs", texte: "Les dernières annonces de chaque cours dans une note, et tes devoirs « à rendre » ou « rendu » dans la semaine." },
+      { titre: "Tes notes, pour toi seul", texte: "« Mes notes Moodle » s’affichent sur ton appareil et ne sont jamais écrites dans le coffre partagé." },
+      { titre: "Ton mot de passe reste à toi", texte: "Il sert une seule fois à obtenir un jeton d’accès, gardé sur ton appareil seulement. Ou colle directement le jeton depuis Moodle." },
+    ],
+  },
+  {
+    id: "geii",
+    titre: "Logiciels de GEII",
+    resume: "Tes fichiers de TP lisibles dans Obsidian.",
+    fonctions: [
+      { titre: "Code", texte: "Arduino (.ino), C pour PIC, MATLAB, Python, VHDL et assembleur s’ouvrent et se modifient dans Obsidian, avec un bouton pour les ouvrir dans le logiciel." },
+      { titre: "LTspice et KiCad", texte: "Un schéma LTspice est dessiné ; un schéma KiCad est résumé en composants, valeurs et empreintes. Ces fichiers ne sont jamais fusionnés ligne à ligne." },
+      { titre: "Calculs", texte: "Un bloc calc dans une note : R = 4.7k, C = 10µ, fc = 1/(2*pi*R*C), et les résultats s’affichent en notation ingénieur." },
+    ],
+  },
+  {
     id: "semaine",
     titre: "La semaine",
     resume: "Cours, devoirs et révisions au même endroit.",
     fonctions: [
+      { titre: "Le même agenda", texte: "Un emploi du temps commun s’ajoute une fois « pour toute la cordée » : chacun voit les mêmes cours." },
       { titre: "Emploi du temps", texte: "Colle le lien iCal de ton emploi du temps (ADE, Hyperplanning…) dans les réglages : tes cours s’affichent dans la vue Semaine, en grille sur ordinateur et en liste sur téléphone." },
       { titre: "Devoirs Moodle", texte: "Le lien « Exporter le calendrier » de Moodle ajoute tes devoirs à rendre, avec leur heure limite. Pas besoin de ton mot de passe." },
       { titre: "Agenda de la cordée", texte: "Un créneau ajouté (révision, projet, rendu) apparaît chez tout le monde. C’est une simple note partagée, modifiable à la main." },
@@ -83,6 +105,16 @@ export const ouTrouver: Fonction[] = [
 export type Version = { version: string; titre: string; points: string[] };
 
 export const versions: Version[] = [
+  {
+    version: "0.4.0",
+    titre: "Moodle, logiciels GEII et le même agenda",
+    points: [
+      "Moodle : tes fichiers de cours arrivent dans le coffre, avec les annonces et les devoirs (rendu ou à rendre) dans la semaine. Tes notes restent sur ton appareil.",
+      "Logiciels de GEII : code Arduino, C, MATLAB, Python, VHDL dans Obsidian, schémas LTspice dessinés, schémas KiCad résumés, et des blocs de calcul en notation ingénieur.",
+      "Un emploi du temps ajouté pour toute la cordée : tout le monde voit les mêmes cours.",
+      "Qui est en ligne, sur quelle note, et depuis quand l’autre n’est plus venu.",
+    ],
+  },
   {
     version: "0.3.0",
     titre: "La semaine de la cordée",

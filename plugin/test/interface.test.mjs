@@ -136,10 +136,10 @@ test('GEII : LTspice dessine un SVG sûr, ajuste le zoom et ne sauvegarde jamais
   assert.ok(rendu.elements.some(e => e.tag === 'text' && e.textContent === '<script>alert(1)</script>'));
   assert.equal(rendu.elements.some(e => e.tag === 'script' || e.tag === 'textarea'), false);
   const svg = rendu.elements.find(e => e.tag === 'svg');
-  assert.match(svg.attrs.attr.viewBox, /^-324 /); assert.equal(svg.style.width, '100%');
-  rendu.boutons.get('Agrandir')(); assert.equal(svg.style.width, '125%');
+  assert.match(svg.attrs.attr.viewBox, /^-324 /); const naturelle = parseInt(svg.style.width, 10); assert.ok(naturelle > 0 && svg.style.width.endsWith('px')); assert.equal(svg.style.maxWidth, '100%', 'taille naturelle, sans dépasser la largeur');
+  rendu.boutons.get('Agrandir')(); assert.equal(svg.style.width, `${Math.round(naturelle * 1.25)}px`); assert.equal(svg.style.maxWidth, 'none');
   rendu.boutons.get('Ajuster à la largeur')(); assert.equal(svg.style.width, '100%');
-  rendu.boutons.get('Réduire')(); assert.equal(svg.style.width, '80%');
+  rendu.boutons.get('Réduire')(); assert.equal(svg.style.width, `${Math.round(naturelle)}px`);
   await vue.save(); await rendu.boutons.get('Ouvrir dans LTspice')(); assert.equal(ouvert, 'rc.asc');
   vue.setViewData('Version 4\nSHEET 1 1 1', true); assert.ok(rendu.textes.includes('Aucun élément LTspice reconnu.'));
 });
@@ -1375,4 +1375,17 @@ test('Moodle : fermer les notes pendant leur lecture ignore la réponse tardive'
   await requete; modal.onClose(); liberer(); await ouverture;
   assert.equal(rendu.textes.some((t) => String(t).includes('Note tardive privée')), false);
   assert.equal(elements.size, 0);
+});
+
+test('devoirs Moodle dans la semaine : état rendu ou à rendre, sans doublon avec le lien iCal', async () => {
+  const { plugin } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  const limite = new Date(2026, 10, 13, 23, 59).getTime();
+  plugin.etat.calendriers = [{ id: 'm', nom: 'Moodle', url: LIEN_MOODLE, type: 'moodle' }];
+  plugin.etat.cacheCalendriers = { m: { maj: Date.now(), evenements: [{ titre: 'Rendu TP2 est dû', debut: limite, fin: limite }] } };
+  plugin.devoirsMoodle = () => [{ titre: 'Rendu TP2', cours: 'ENER3', debut: limite, rendu: true, url: 'https://moodle.exemple.fr/mod/assign/view.php?id=1' }];
+  const evts = await plugin.evenementsEntre(new Date(2026, 10, 9).getTime(), new Date(2026, 10, 16).getTime());
+  assert.equal(evts.length, 1, 'le devoir n’apparaît qu’une fois');
+  assert.equal(evts[0].rendu, true);
+  assert.equal(evts[0].source, 'Moodle · ENER3');
 });

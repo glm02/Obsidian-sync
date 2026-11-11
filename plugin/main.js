@@ -423,7 +423,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.3.0';
+const VERSION = '0.4.0';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -916,6 +916,14 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
       for (const e of developper(cache?.evenements || [], de, a)) tous.push({ ...e, source: s.nom, type: s.type, partage: !!s.partage, couleur: COULEURS_CALENDRIER[s.type] || COULEURS_CALENDRIER.autre });
     }
     for (const e of lireAgendaPartage(texte)) if (e.fin > de && e.debut < a) tous.push({ ...e, source: 'Agenda de la cordée', type: 'cordee', couleur: COULEURS_CALENDRIER.cordee });
+    // Devoirs lus par la connexion Moodle : ils savent s'ils sont rendus. Le même devoir venu aussi
+    // du lien iCal Moodle (même heure limite) n'est montré qu'une fois, avec son état.
+    for (const d of (typeof this.devoirsMoodle === 'function' ? this.devoirsMoodle() : [])) {
+      if (!(d.debut >= de && d.debut < a)) continue;
+      const doublon = tous.findIndex((e) => e.type === 'moodle' && Math.abs(e.debut - d.debut) < 60_000);
+      if (doublon >= 0) tous.splice(doublon, 1);
+      tous.push({ titre: d.titre, debut: d.debut, fin: d.debut, type: 'moodle', source: d.cours ? `Moodle · ${d.cours}` : 'Moodle', rendu: !!d.rendu, url: d.url, couleur: COULEURS_CALENDRIER.moodle });
+    }
     return tous.sort((x, y) => x.debut - y.debut);
   }
 
@@ -1875,7 +1883,7 @@ if (O) {
       for (const e of [...restants, ...echeances]) {
         const b = boutonCordee(zone, '', () => new EvenementModal(this.app, p, e).open(), { label: e.titre, cls: 'cordee-evenement-ligne' });
         b.style?.setProperty?.('--cordee-couleur', e.couleur);
-        const quand = estEcheance(e) ? `À rendre ${new Date(e.debut).toLocaleDateString('fr-FR', { weekday: 'short' })} ${heure(e.debut)}` : e.journee ? 'Journée' : `${heure(e.debut)}–${heure(e.fin)}`;
+        const quand = estEcheance(e) ? `${e.rendu ? 'Rendu' : 'À rendre'} ${new Date(e.debut).toLocaleDateString('fr-FR', { weekday: 'short' })} ${heure(e.debut)}` : e.journee ? 'Journée' : `${heure(e.debut)}–${heure(e.fin)}`;
         b.createEl('span', { text: quand, cls: 'cordee-evenement-heure' });
         const t = b.createEl('span', { cls: 'cordee-evenement-texte' });
         t.createEl('strong', { text: e.titre });
@@ -2082,7 +2090,7 @@ if (O) {
     for (const j of jours) {
       const cellule = grille.createEl('div', { cls: 'cordee-grille-journee' });
       for (const e of evts.filter((x) => enJournee(x) && touche(x, j))) {
-        const b = boutonCordee(cellule, estEcheance(e) ? `À rendre ${heure(e.debut)} · ${e.titre}` : e.titre, () => ouvrir(e), { cls: 'cordee-pastille' + (estEcheance(e) ? ' cordee-echeance' : '') });
+        const b = boutonCordee(cellule, estEcheance(e) ? `${e.rendu ? 'Rendu' : 'À rendre'} ${heure(e.debut)} · ${e.titre}` : e.titre, () => ouvrir(e), { cls: 'cordee-pastille' + (estEcheance(e) ? ' cordee-echeance' : '') + (e.rendu ? ' cordee-echeance-rendue' : '') });
         b.style?.setProperty?.('--cordee-couleur', e.couleur);
       }
     }
@@ -2117,7 +2125,7 @@ if (O) {
       for (const e of duJour) {
         const b = boutonCordee(bloc, '', () => ouvrir(e), { label: e.titre, cls: 'cordee-evenement-ligne' });
         b.style?.setProperty?.('--cordee-couleur', e.couleur);
-        b.createEl('span', { text: e.journee ? 'Journée' : estEcheance(e) ? `À rendre ${heure(e.debut)}` : `${heure(e.debut)}–${heure(e.fin)}`, cls: 'cordee-evenement-heure' });
+        b.createEl('span', { text: e.journee ? 'Journée' : estEcheance(e) ? `${e.rendu ? 'Rendu' : 'À rendre'} ${heure(e.debut)}` : `${heure(e.debut)}–${heure(e.fin)}`, cls: 'cordee-evenement-heure' });
         const texte = b.createEl('span', { cls: 'cordee-evenement-texte' });
         texte.createEl('strong', { text: e.titre });
         const details = [e.lieu, e.source].filter(Boolean).join(' · ');
@@ -2550,11 +2558,18 @@ function afficherAscGeii(c, source) {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const [x, y] of points) { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
   svg.setAttribute('viewBox', `${minX - 24} ${minY - 24} ${Math.max(80, maxX - minX + 48)} ${Math.max(80, maxY - minY + 48)}`);
-  let zoom = 1;
-  const ajuster = () => { svg.style.width = `${zoom * 100}%`; svg.style.height = 'auto'; };
-  boutonCordee(commandes, 'Réduire', () => { zoom = Math.max(0.25, zoom / 1.25); ajuster(); }, { cls: 'cordee-bouton-discret' });
-  boutonCordee(commandes, 'Agrandir', () => { zoom = Math.min(8, zoom * 1.25); ajuster(); }, { cls: 'cordee-bouton-discret' });
-  boutonCordee(commandes, 'Ajuster à la largeur', () => { zoom = 1; ajuster(); }, { cls: 'cordee-bouton-discret' }); ajuster();
+  // Taille naturelle par défaut (1 unité LTspice = 1 pixel), sans dépasser la largeur : étiré sur toute la
+  // largeur, un petit circuit devenait énorme et débordait sur la suite de la note.
+  const largeurNaturelle = Math.max(80, maxX - minX + 48);
+  let zoom = 1, pleineLargeur = false;
+  const ajuster = () => {
+    svg.style.height = 'auto';
+    svg.style.width = pleineLargeur ? '100%' : `${Math.round(largeurNaturelle * zoom)}px`;
+    svg.style.maxWidth = pleineLargeur || zoom <= 1 ? '100%' : 'none';
+  };
+  boutonCordee(commandes, 'Réduire', () => { pleineLargeur = false; zoom = Math.max(0.25, zoom / 1.25); ajuster(); }, { cls: 'cordee-bouton-discret' });
+  boutonCordee(commandes, 'Agrandir', () => { pleineLargeur = false; zoom = Math.min(8, zoom * 1.25); ajuster(); }, { cls: 'cordee-bouton-discret' });
+  boutonCordee(commandes, 'Ajuster à la largeur', () => { pleineLargeur = true; ajuster(); }, { cls: 'cordee-bouton-discret' }); ajuster();
 }
 
 function afficherKicadGeii(c, source) {
