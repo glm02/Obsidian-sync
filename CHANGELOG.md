@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.1
+
+- **Connexion universitaire Moodle** : parcours par navigateur pour les comptes dont les préférences n’affichent qu’une clé RSS. Après authentification sur le site de l’université, copier le lien « lancer l’application » dans la fenêtre de connexion Cordée. Le mot de passe reste sur le site ; seule la clé de service web est enregistrée localement. Le retour dans Cordée est manuel.
+- Les adresses terminant par `/login/index.php` sont ramenées à la racine du site, en conservant un éventuel sous-dossier.
+- Les erreurs Moodle distinguent un jeton rejeté ou expiré, une restriction réseau, un service indisponible et un accès refusé ; les réponses réseau et les secrets ne sont jamais affichés.
+
 ## 0.4.0
 
 - **Qui est là** : chaque membre apparaît « en ligne · sur sa note », sinon « vu il y a 12 min », « vu hier » ou « pas encore connecté ». Une notification « Bruno vient de se connecter » (au plus une fois par demi-heure, désactivable), un point vert dans la barre d’état. « Masquer ma présence » cache aussi la dernière visite.

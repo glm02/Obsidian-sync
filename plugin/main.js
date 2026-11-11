@@ -423,7 +423,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.0';
+const VERSION = '0.4.1';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -2656,7 +2656,7 @@ function enregistrerGeii(plugin) {
 
 const TAILLE_MAX_MOODLE = 50 * 1024 * 1024;
 const DELAI_MOODLE = 6 * 3600_000;
-const AIDE_JETON_MOODLE = 'Ton Moodle utilise peut-être la connexion de l’université : copie le jeton depuis Préférences → Clés de sécurité (« Moodle mobile web service »).';
+const AIDE_JETON_MOODLE = 'Ton Moodle utilise peut-être la connexion de l’université : choisis « Se connecter via le navigateur ». Si tu disposes déjà d’une clé « Moodle mobile web service » dans Préférences → Clés de sécurité, tu peux aussi la coller. La clé RSS ne convient pas.';
 
 function nomMoodle(valeur, repli = 'Sans nom') {
   // Les crochets et la barre verticale sont aussi retirés pour garder des liens Obsidian valides.
@@ -2676,7 +2676,9 @@ function siteMoodle(valeur) {
   try {
     const u = new URL(String(valeur || '').trim());
     if (u.protocol !== 'https:' || u.username || u.password || u.search || u.hash) throw new Error();
-    return u.origin + u.pathname.replace(/\/+$/, '');
+    // Une adresse copiée depuis la connexion reste utilisable, même pour un Moodle en sous-dossier.
+    const chemin = u.pathname.replace(/\/+$/, '').replace(/\/(?:login\/)?index\.php$/, '');
+    return u.origin + chemin;
   } catch { throw new Error('Indique l’adresse HTTPS de ton Moodle, par exemple https://moodle.exemple.fr.'); }
 }
 
@@ -2684,6 +2686,28 @@ function copieMoodle(chemin, numero = 1) {
   const point = chemin.lastIndexOf('.'), slash = chemin.lastIndexOf('/');
   const suffixe = numero === 1 ? ' (Moodle)' : ` (Moodle ${numero})`;
   return point > slash ? chemin.slice(0, point) + suffixe + chemin.slice(point) : chemin + suffixe;
+}
+
+function lienConnexionMoodle(site) {
+  const url = new URL(siteMoodle(site) + '/admin/tool/mobile/launch.php');
+  const passport = Array.from(crypto.getRandomValues(new Uint8Array(24)), (b) => b.toString(16).padStart(2, '0')).join('');
+  url.search = new URLSearchParams({ service: 'moodle_mobile_app', passport, urlscheme: 'cordee-moodle', confirmed: '1' }).toString();
+  return url.href;
+}
+
+function jetonDepuisLienMoodle(valeur) {
+  const texte = String(valeur || '').trim();
+  if (!texte.includes('://')) return texte;
+  try {
+    // Le lien est collé volontairement dans Cordée, jamais ouvert ni envoyé à un autre site.
+    const lien = /^(?:cordee-moodle|moodlemobile):\/\/token=([^\s]+)$/.exec(texte);
+    if (!lien || lien[1].length > 4096) throw new Error();
+    const base64 = decodeURIComponent(lien[1]);
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(base64)) throw new Error();
+    const parties = atob(base64).split(':::');
+    if (parties.length < 2 || parties.length > 3 || parties.some((p) => !/^[a-f0-9]{32}$/i.test(p))) throw new Error();
+    return parties[1]; // La troisième partie, clé privée de l’app mobile, n’est jamais conservée.
+  } catch { throw new Error('Copie l’adresse complète du lien « lancer l’application » sur la page Moodle, puis colle-la ici.'); }
 }
 
 function modificationLocaleMoodle(avant, hash) { return hash !== null && (!avant?.hash || avant.hash !== hash); }
@@ -2735,9 +2759,19 @@ function indexMoodle(cours, sections, fichiers, cache) {
 }
 
 function erreurMoodle(code) {
-  const message = ['invalidtoken', 'accessexception', 'requireloginerror', 'servicenotavailable', 'webservice_access_exception'].includes(code)
-    ? 'Ton jeton Moodle est invalide ou expiré. Copie un nouveau jeton dans Préférences → Clés de sécurité.'
-    : 'Moodle refuse cette demande. Vérifie que les services de l’application mobile sont activés pour ton compte.';
+  // Messages locaux : ne jamais afficher le texte réseau, qui peut contenir le jeton.
+  const messages = new Map([
+    ['invalidtoken', 'Ton jeton Moodle est invalide ou expiré (invalidtoken). Dans Préférences → Clés de sécurité, copie la clé du service « Moodle mobile web service », pas la clé RSS.'],
+    ['invalidtimedtoken', 'Ton jeton Moodle a expiré (invalidtimedtoken). Renouvelle la clé du service mobile dans Préférences → Clés de sécurité.'],
+    ['invalidiptoken', 'Moodle refuse ce jeton depuis ta connexion réseau (invalidiptoken). Une restriction réseau doit être vérifiée par l’administrateur Moodle.'],
+    ['accessexception', 'Moodle refuse l’accès à cette fonction (accessexception). Vérifie le service associé au jeton ; les autorisations peuvent nécessiter l’intervention de l’administrateur Moodle.'],
+    ['webservice_access_exception', 'Moodle refuse l’accès au service (webservice_access_exception). Les autorisations de ton compte ou du service doivent être vérifiées.'],
+    ['servicenotavailable', 'Le service demandé est indisponible ou désactivé sur Moodle (servicenotavailable).'],
+    ['requireloginerror', 'Moodle exige une connexion pour cette demande (requireloginerror). Vérifie que le jeton correspond au service mobile.'],
+    ['http401', 'Le serveur refuse la demande (HTTP 401). Cela ne suffit pas à conclure que ton jeton est invalide.'],
+    ['http403', 'Le serveur interdit l’accès (HTTP 403). Cela ne suffit pas à conclure que ton jeton est invalide.'],
+  ]);
+  const message = messages.get(code) || 'Moodle refuse cette demande. Vérifie que les services de l’application mobile sont activés pour ton compte.';
   return Object.assign(new Error(message), { codeMoodle: code });
 }
 
@@ -2800,7 +2834,7 @@ Object.assign(CordeePlugin.prototype, {
     let r;
     try { r = await O.requestUrl({ url, method: 'POST', contentType: 'application/x-www-form-urlencoded', body: new URLSearchParams(body).toString(), throw: false }); }
     catch { throw new Error('Ton site Moodle est injoignable. Vérifie son adresse et ta connexion, puis réessaie.'); }
-    if ([401, 403].includes(r.status)) throw erreurMoodle('invalidtoken');
+    if ([401, 403].includes(r.status)) throw erreurMoodle('http' + r.status);
     if (r.status >= 300) throw new Error('Ton site Moodle est injoignable. Vérifie son adresse et ta connexion, puis réessaie.');
     let json;
     try { json = r.json; } catch { /* une page de connexion n’est pas une réponse de l’API */ }
@@ -2816,7 +2850,7 @@ Object.assign(CordeePlugin.prototype, {
   async connecterMoodle(site, jeton, identifiant, motDePasse) {
     if (this.moodleEnCours) throw new Error('Attends la fin de la récupération avant de changer de compte Moodle.');
     const ancien = this.etat.moodle, tentative = this.moodleConnexion = (this.moodleConnexion || 0) + 1;
-    const acces = { site: siteMoodle(site), jeton: String(jeton || '').trim() };
+    const acces = { site: siteMoodle(site), jeton: jetonDepuisLienMoodle(jeton) };
     if (!acces.jeton && motDePasse) {
       let reponse;
       try { reponse = await this.requeteMoodle(acces.site + '/login/token.php', { username: identifiant, password: motDePasse, service: 'moodle_mobile_app' }); }
@@ -3006,10 +3040,14 @@ function afficherReglagesMoodle(c, p) {
   zone.createEl('p', { text: 'Récupère tes PDF de cours, TD, TP et sujets dans le coffre. Les fichiers choisis sont partagés avec la cordée, sauf dans les « Dossiers non partagés ». Le jeton reste dans la configuration de cet appareil.', cls: 'cordee-details' });
   const retour = zone.createEl('p', { cls: 'cordee-details', attr: { role: 'status', 'aria-live': 'polite' } });
   let adresse = p.etat.moodle.site, identifiant = '', jeton, motDePasse;
-  new O.Setting(zone).setName('Adresse du site Moodle').addText((t) => t.setPlaceholder('https://moodle.exemple.fr').setValue(adresse).onChange((v) => { adresse = v; }));
+  new O.Setting(zone).setName('Adresse du site Moodle').setDesc('Colle l’adresse du site ou sa page de connexion : la fin /login/index.php est retirée automatiquement. Pour le champ « Lien iCal », utilise plutôt Calendrier → Exporter le calendrier dans Moodle.').addText((t) => t.setPlaceholder('https://moodle.exemple.fr').setValue(adresse).onChange((v) => { adresse = v; }));
+  new O.Setting(zone).setName('Connexion universitaire').setDesc('Pour Lyon 1 et les connexions via le site de l’université, même si tes préférences Moodle n’affichent qu’une clé RSS.').addButton((b) => b.setButtonText('Se connecter via le navigateur').onClick(() => {
+    try { new ConnexionMoodleModal(p.app, p, siteMoodle(adresse)).open(); }
+    catch (e) { retour.setText(e.message); }
+  }));
   new O.Setting(zone).setName('Identifiant Moodle').setDesc('Facultatif si tu colles un jeton.').addText((t) => t.onChange((v) => { identifiant = v; }));
   new O.Setting(zone).setName('Mot de passe Moodle').setDesc('Utilisé une seule fois pour obtenir un jeton, jamais enregistré.').addText((t) => { motDePasse = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; });
-  new O.Setting(zone).setName('Jeton Moodle').setDesc('Ou copie le jeton depuis Moodle → Préférences → Clés de sécurité. Un champ vide conserve le jeton déjà enregistré pour ce site.').addText((t) => { jeton = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; t.setPlaceholder(p.etat.moodle.jeton ? 'Jeton enregistré sur cet appareil' : 'Coller un jeton'); });
+  new O.Setting(zone).setName('Jeton Moodle').setDesc('Dans Moodle → Préférences → Clés de sécurité, copie la clé du service « Moodle mobile web service », pas la clé RSS. Avec un jeton, laisse le mot de passe vide. Un champ vide conserve le jeton déjà enregistré pour ce site.').addText((t) => { jeton = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; t.setPlaceholder(p.etat.moodle.jeton ? 'Jeton enregistré sur cet appareil' : 'Coller un jeton'); });
   new O.Setting(zone).addButton((b) => b.setButtonText('Tester').onClick(async () => {
     b.setDisabled(true);
     const secret = motDePasse.inputEl.value || '', cle = jeton.inputEl.value || '';
@@ -3021,6 +3059,41 @@ function afficherReglagesMoodle(c, p) {
     .addButton((b) => b.setButtonText('Mes notes Moodle').onClick(() => new NotesMoodleModal(p.app, p).open()))
     .addButton((b) => b.setButtonText('Se déconnecter de Moodle').onClick(async () => { await p.deconnecterMoodle(); motDePasse.setValue(''); jeton.setValue(''); retour.setText('Déconnecté de Moodle. Les fichiers déjà récupérés restent dans le coffre.'); }));
 }
+
+let ConnexionMoodleModal;
+if (O) ConnexionMoodleModal = class extends O.Modal {
+  constructor(app, plugin, site) { super(app); this.plugin = plugin; this.site = site; }
+  onOpen() {
+    const c = this.contentEl, p = this.plugin;
+    this.accesInitial = p.etat.moodle;
+    c.empty(); c.createEl('h2', { text: 'Connexion Moodle par le navigateur' });
+    c.createEl('p', { text: '1. Ouvre Moodle ci-dessous et connecte-toi avec le bouton de ton université (Lyon 1). Ton mot de passe est saisi uniquement sur son site.' });
+    c.createEl('a', { text: 'Ouvrir la connexion Moodle', cls: 'external-link', attr: { href: lienConnexionMoodle(this.site), target: '_blank', rel: 'noopener noreferrer' } });
+    c.createEl('p', { text: '2. Après la connexion, Moodle affiche un lien pour lancer l’application. Si le navigateur indique qu’aucune application ne peut l’ouvrir, ferme ce message. Fais un clic droit ou un appui long sur ce lien, puis « Copier l’adresse du lien ».' });
+    c.createEl('p', { text: '3. Reviens ici et colle ce lien. Il donne accès à ton compte : garde-le privé. La clé RSS des préférences ne convient pas.' });
+    let champ;
+    new O.Setting(c).setName('Lien de retour Moodle').addText((t) => { champ = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; t.setPlaceholder('cordee-moodle://token=…'); });
+    this.champ = champ;
+    const retour = c.createEl('p', { cls: 'cordee-details', attr: { role: 'status', 'aria-live': 'polite' } });
+    new O.Setting(c).addButton((b) => b.setButtonText('Terminer la connexion').setCta().onClick(async () => {
+      if (this.ferme) return;
+      if (this.accesInitial !== p.etat.moodle) { retour.setText('Le compte Moodle a changé. Ferme cette fenêtre et recommence la connexion.'); return; }
+      b.setDisabled(true);
+      const lien = champ.inputEl.value || ''; champ.setValue('');
+      try {
+        const jeton = jetonDepuisLienMoodle(lien);
+        if (!jeton || !lien.includes('://')) throw new Error('Colle le lien de retour fourni par Moodle après ta connexion.');
+        const resultat = await p.connecterMoodle(this.site, jeton);
+        if (this.ferme) return;
+        this.accesInitial = p.etat.moodle;
+        retour.setText(`Connecté en tant que ${resultat.prenom} · ${resultat.cours.length} cours`);
+        new O.Notice('Connexion Moodle enregistrée. Tu peux ouvrir « Cours Moodle ».');
+      } catch (e) { if (!this.ferme) retour.setText(e.message); }
+      finally { b.setDisabled(false); }
+    }));
+  }
+  onClose() { this.ferme = true; this.champ?.setValue(''); this.contentEl.empty(); }
+};
 
 let CoursMoodleModal;
 if (O) CoursMoodleModal = class extends O.Modal {
@@ -3101,5 +3174,5 @@ module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
 module.exports.interne = { lireCalendriersPartages, modifierCalendriersPartages, get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, arriveesPresence, derniereActivite, resumePresence, afficherBarrePresence, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
 Object.assign(module.exports.interne, { lireAsc, lireKicad, calculerExpressionGeii, calculerBlocGeii, notationIngenieurGeii, estTexte });
-Object.assign(module.exports.interne, { nomMoodle, dossierMoodle, siteMoodle, fichiersMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, get CoursMoodleModal() { return CoursMoodleModal; } });
+Object.assign(module.exports.interne, { nomMoodle, dossierMoodle, siteMoodle, lienConnexionMoodle, jetonDepuisLienMoodle, fichiersMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, get CoursMoodleModal() { return CoursMoodleModal; } });
 Object.assign(module.exports.interne, { markdownMoodle, devoirMoodle, noteAnnoncesMoodle, get NotesMoodleModal() { return NotesMoodleModal; } });

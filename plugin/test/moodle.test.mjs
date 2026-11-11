@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { nomMoodle, dossierMoodle, siteMoodle, fichiersMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, markdownMoodle, devoirMoodle, noteAnnoncesMoodle } = require('../main.js').interne;
+const { nomMoodle, dossierMoodle, siteMoodle, lienConnexionMoodle, jetonDepuisLienMoodle, fichiersMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, markdownMoodle, devoirMoodle, noteAnnoncesMoodle } = require('../main.js').interne;
 const fichier = (autre = {}) => ({ type: 'file', filename: 'cours.pdf', filepath: '/', fileurl: 'https://moodle.exemple.fr/webservice/pluginfile.php/12/cours.pdf', filesize: 120, timemodified: 17, ...autre });
 const sections = [{ id: 1, name: 'TD / TP', modules: [
   { id: 10, modname: 'resource', contents: [fichier()] },
@@ -32,11 +32,47 @@ test('Moodle : destinations relatives nettoyées, traversées et sites sans HTTP
   for (const valeur of ['http://moodle.exemple.fr', 'https://agent-local@moodle.exemple.fr', 'https://moodle.exemple.fr/?token=factice', 'pas un site']) assert.throws(() => siteMoodle(valeur));
 });
 
+test('Moodle : une page de connexion donne la racine du site et conserve son sous-dossier', () => {
+  for (const base of ['https://moodle.exemple.fr', 'https://moodle.exemple.fr/campus']) {
+    for (const fin of ['/login/index.php', '/login/index.php/', '/index.php']) {
+      assert.equal(siteMoodle(`  ${base}${fin}  `), base);
+    }
+    assert.throws(() => siteMoodle(base + '/login/index.php?token=factice'));
+  }
+});
+
 test('Moodle : seules les ressources et dossiers sont pris, avec leurs sous-dossiers', () => {
   const fichiers = fichiersMoodle(sections, 'Moodle/ENER3', 3);
   assert.deepEqual(fichiers.map((f) => f.chemin), ['Moodle/ENER3/TD - TP/cours.pdf', 'Moodle/ENER3/TD - TP/Mes TD/cours.pdf', 'Moodle/ENER3/TD - TP/sujet.pdf']);
   assert.equal(new Set(fichiers.map((f) => f.cle)).size, 3);
   assert.equal(fichiers[0].filesize, 120);
+});
+
+test('Moodle : connexion navigateur sur le site choisi avec un passeport aléatoire sans identifiant personnel', () => {
+  const url = new URL(lienConnexionMoodle('https://moodle.exemple.fr/campus/login/index.php'));
+  assert.equal(url.origin + url.pathname, 'https://moodle.exemple.fr/campus/admin/tool/mobile/launch.php');
+  assert.equal(url.searchParams.get('service'), 'moodle_mobile_app');
+  assert.equal(url.searchParams.get('urlscheme'), 'cordee-moodle');
+  assert.equal(url.searchParams.get('confirmed'), '1');
+  assert.match(url.searchParams.get('passport'), /^[a-f0-9]{48}$/);
+  assert.notEqual(url.searchParams.get('passport'), new URL(lienConnexionMoodle('https://moodle.exemple.fr/campus')).searchParams.get('passport'));
+  assert.deepEqual([...url.searchParams.keys()].sort(), ['confirmed', 'passport', 'service', 'urlscheme']);
+  assert.throws(() => lienConnexionMoodle('http://moodle.exemple.fr'));
+});
+
+test('Moodle : le retour mobile fournit uniquement le jeton public et refuse les liens étrangers ou abîmés', () => {
+  const id = 'a'.repeat(32), jeton = 'b'.repeat(32), prive = 'c'.repeat(32);
+  for (const scheme of ['cordee-moodle', 'moodlemobile']) {
+    for (const contenu of [`${id}:::${jeton}`, `${id}:::${jeton}:::${prive}`]) {
+      const lien = `${scheme}://token=${Buffer.from(contenu).toString('base64')}`;
+      assert.equal(jetonDepuisLienMoodle(lien), jeton);
+      assert.equal(jetonDepuisLienMoodle(lien.replace(/=+$/, (s) => encodeURIComponent(s))), jeton);
+    }
+  }
+  assert.equal(jetonDepuisLienMoodle('  jeton-manuel-factice  '), 'jeton-manuel-factice');
+  for (const lien of ['https://exemple.fr/?token=secret', 'cordee-moodle://token=???', 'cordee-moodle://token=' + Buffer.from('secret').toString('base64'), 'cordee-moodle://token=' + 'a'.repeat(4097)]) {
+    assert.throws(() => jetonDepuisLienMoodle(lien), (e) => !e.message.includes('secret'));
+  }
 });
 
 test('Moodle : des noms identiques ou qui ne diffèrent que par la casse gardent deux fichiers', () => {

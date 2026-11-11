@@ -4,6 +4,8 @@
 
 **Privacy and network use:** the plugin contacts only the server you choose after you explicitly create or join a shared vault. Notes, attachments, file paths, display names and change history are sent to that server. The host can read them; there is no end-to-end encryption in version 0.1. Excluded folders and Obsidian settings are not shared. There is no client analytics, advertising, payment or external account requirement. Data outside the open vault is not accessed. Access tokens are stored locally in the plugin's `data.json`; keep `.obsidian/` out of public repositories. The server retains file versions until its operator removes them. See [the publication report](docs/publication.md) for tested platforms and current limits.
 
+**Optional Moodle connection:** when you enable it, Cordee contacts the Moodle site you enter. University sign-in opens that site and its identity provider in your browser; the password stays there. You manually paste the application's return link into Cordee, which verifies the web-service token against that Moodle site and stores only that token locally. The RSS key does not work for this connection. Selected course files and announcements are copied into the vault and follow its sharing rules; grades remain on the device. See [the Moodle connection guide](docs/moodle.md).
+
 Partage un coffre Obsidian avec tes amis, sur ton propre serveur. Gratuit, auto-hébergé, sans compte GitHub, et ça marche sur téléphone.
 
 - Les modifications arrivent chez les autres en quelques secondes.

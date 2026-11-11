@@ -1,0 +1,56 @@
+# Publie la release GitHub de l'extension dès que la version change sur main.
+#
+# Pourquoi : Cordée est dans le catalogue d'Obsidian. Le bouton « Mettre à jour » lit la version de
+# manifest.json sur main, puis télécharge main.js, manifest.json et styles.css depuis la release qui porte
+# ce numéro. Une version poussée sans sa release donne « Échec de l'installation » chez tout le monde
+# (c'est arrivé avec la 0.1.5). Ici, la release suit automatiquement, après les tests.
+name: Release de l'extension
+
+on:
+  push:
+    branches: [main]
+    paths: [manifest.json, plugin/**, CHANGELOG.md]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Tests (serveur, extension, synchro de bout en bout)
+        working-directory: server
+        run: npm test
+
+      - name: Publier la release si cette version n'existe pas encore
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          V=$(python3 -c "import json; print(json.load(open('manifest.json'))['version'])")
+          if gh release view "$V" >/dev/null 2>&1; then
+            echo "La release $V existe déjà : rien à faire."
+            exit 0
+          fi
+          python3 scripts/prepare_release.py
+          python3 - "$V" <<'EOF'
+          import re, sys
+          v = sys.argv[1]
+          texte = open('CHANGELOG.md', encoding='utf-8').read()
+          m = re.search(r'^## ' + re.escape(v) + r'\n(.*?)(?=^## |\Z)', texte, re.S | re.M)
+          notes = m.group(1).strip() if m else f'Version {v}.'
+          open('notes.md', 'w', encoding='utf-8').write(notes + '\n')
+          EOF
+          gh release create "$V" "dist/$V/main.js" "dist/$V/manifest.json" "dist/$V/styles.css" "dist/$V/cordee.zip" "dist/$V/SHA256SUMS.txt" \
+            --title "$V" --notes-file notes.md --target "$GITHUB_SHA"

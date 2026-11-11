@@ -1035,31 +1035,34 @@ test('emploi du temps pour toute la cordée : écrit dans la note commune, lu pa
   assert.equal((await plugin.evenementsEntre(new Date(2026, 10, 9).getTime(), new Date(2026, 10, 16).getTime())).length, 0);
 });
 
-test('Moodle : les réglages obtiennent un jeton et effacent le mot de passe sans le sauvegarder', async () => {
+test('Moodle : une adresse de connexion obtient un jeton et efface le mot de passe sans le sauvegarder', async () => {
   const { plugin, rendu, obsidian } = charger({});
   const appels = [];
   obsidian.requestUrl = async (r) => {
     appels.push(r);
     const param = new URLSearchParams(r.body);
     if (r.url.endsWith('/login/token.php')) {
+      assert.equal(r.url, 'https://moodle.exemple.fr/campus/login/token.php');
       assert.equal(param.get('service'), 'moodle_mobile_app');
       assert.equal(param.get('username'), 'agent-local');
       assert.equal(param.get('password'), 'mot-de-passe-factice');
       return { status: 200, json: { token: 'jeton-moodle-factice' } };
     }
+    assert.equal(r.url, 'https://moodle.exemple.fr/campus/webservice/rest/server.php');
     assert.equal(param.get('wstoken'), 'jeton-moodle-factice');
     return { status: 200, json: param.get('wsfunction') === 'core_webservice_get_site_info' ? { userid: 42, firstname: 'Étudiant test' } : [{ id: 3, shortname: 'ENER3' }] };
   };
   await plugin.onload(); plugin.onglet.display();
   assert.ok(rendu.textes.includes('Moodle'));
   const champ = (nom) => rendu.champs.find((c) => c.nom === nom).champ;
-  champ('Adresse du site Moodle').change('https://moodle.exemple.fr/campus');
+  champ('Adresse du site Moodle').change('https://moodle.exemple.fr/campus/login/index.php');
   champ('Identifiant Moodle').change('agent-local');
   const passe = champ('Mot de passe Moodle'); passe.inputEl.value = 'mot-de-passe-factice';
   await rendu.boutons.get('Tester')();
   assert.equal(passe.inputEl.value, '');
   assert.ok(rendu.textes.includes('Connecté en tant que Étudiant test · 1 cours'));
   assert.equal(rendu.sauvegarde.moodle.jeton, 'jeton-moodle-factice');
+  assert.equal(rendu.sauvegarde.moodle.site, 'https://moodle.exemple.fr/campus');
   assert.equal(appels.length, 3);
   assert.ok(appels.every((r) => r.method === 'POST' && !r.url.includes('jeton-moodle-factice')));
   assert.doesNotMatch(JSON.stringify(rendu.sauvegarde), /mot-de-passe-factice|password|username/);
@@ -1092,6 +1095,40 @@ test('Moodle : un jeton collé est masqué, enregistré, puis réutilisé par Te
   assert.equal(connexions, 4);
 });
 
+test('Moodle : connexion universitaire avec retour collé, sans mot de passe ni clé privée sauvegardés', async () => {
+  const { plugin, rendu, obsidian } = charger({}, { crypto: webcrypto });
+  const token = 'b'.repeat(32), prive = 'c'.repeat(32);
+  const appels = [];
+  obsidian.requestUrl = async (r) => {
+    appels.push(r);
+    assert.equal(r.url, 'https://moodle.exemple.fr/webservice/rest/server.php');
+    const param = new URLSearchParams(r.body);
+    assert.equal(param.get('wstoken'), token);
+    assert.equal(param.has('password'), false);
+    return { status: 200, json: param.get('wsfunction') === 'core_webservice_get_site_info' ? { userid: 42, firstname: 'Étudiant test' } : [] };
+  };
+  await plugin.onload(); plugin.onglet.display();
+  rendu.champs.find((c) => c.nom === 'Adresse du site Moodle').champ.change('https://moodle.exemple.fr/login/index.php');
+  rendu.boutons.get('Se connecter via le navigateur')();
+  const ancre = rendu.elements.find((e) => e.tag === 'a' && e.textContent === 'Ouvrir la connexion Moodle');
+  assert.equal(new URL(ancre.attrs.attr.href).searchParams.get('urlscheme'), 'cordee-moodle');
+  const champ = rendu.champs.find((c) => c.nom === 'Lien de retour Moodle').champ;
+  assert.equal(champ.inputEl.type, 'password');
+  const lien = 'cordee-moodle://token=' + Buffer.from('a'.repeat(32) + ':::' + token + ':::' + prive).toString('base64');
+  champ.inputEl.value = lien;
+  await rendu.boutons.get('Terminer la connexion')();
+  assert.equal(appels.length, 2);
+  assert.equal(plugin.etat.moodle.jeton, token);
+  assert.equal(champ.inputEl.value, '');
+  assert.doesNotMatch(JSON.stringify(rendu.sauvegarde), new RegExp(prive + '|passport|cordee-moodle://'));
+  assert.ok(rendu.textes.includes('Connecté en tant que Étudiant test · 0 cours'));
+  // Une erreur de copie est locale : aucun lien étranger n’est visité.
+  champ.inputEl.value = 'https://autre.exemple.fr/?token=secret';
+  await rendu.boutons.get('Terminer la connexion')();
+  assert.equal(appels.length, 2);
+  assert.equal(champ.inputEl.value, '');
+});
+
 test('Moodle : les erreurs sont simples et ne reprennent aucun secret de la réponse réseau', async () => {
   const { plugin, obsidian } = charger({});
   await plugin.onload();
@@ -1101,6 +1138,38 @@ test('Moodle : les erreurs sont simples et ne reprennent aucun secret de la rép
   await assert.rejects(plugin.connecterMoodle('https://moodle.exemple.fr', 'factice'), (e) => /invalide ou expiré/.test(e.message) && !e.message.includes('jeton-secret-dans-erreur'));
   obsidian.requestUrl = async () => { throw new Error('https://exemple.fr?token=jeton-secret-dans-erreur'); };
   await assert.rejects(plugin.connecterMoodle('https://moodle.exemple.fr', 'factice'), (e) => /injoignable/.test(e.message) && !e.message.includes('jeton-secret-dans-erreur'));
+});
+
+test('Moodle : distingue un jeton rejeté, un accès refusé et un service indisponible sans exposer les secrets', async () => {
+  const { plugin, obsidian } = charger({});
+  await plugin.onload();
+  const cas = [
+    ['invalidtoken', /invalide ou expiré.*invalidtoken/],
+    ['invalidtimedtoken', /expiré.*invalidtimedtoken/],
+    ['invalidiptoken', /connexion réseau.*invalidiptoken/],
+    ['accessexception', /refuse l’accès.*accessexception/],
+    ['webservice_access_exception', /refuse l’accès.*webservice_access_exception/],
+    ['servicenotavailable', /indisponible ou désactivé/],
+    ['requireloginerror', /exige une connexion/],
+    ['jeton-secret-dans-erreur', /Moodle refuse cette demande/],
+  ];
+  for (const [code, attendu] of cas) {
+    obsidian.requestUrl = async () => ({ status: 200, json: { exception: 'moodle_exception', errorcode: code, message: 'jeton-secret-dans-erreur' } });
+    await assert.rejects(plugin.connecterMoodle('https://moodle.exemple.fr', 'factice'), (e) => {
+      assert.match(e.message, attendu);
+      assert.doesNotMatch(e.message, /jeton-secret-dans-erreur/);
+      if (code !== 'invalidtoken') assert.doesNotMatch(e.message, /Ton jeton Moodle est invalide/);
+      return true;
+    });
+  }
+  for (const status of [401, 403]) {
+    obsidian.requestUrl = async () => ({ status, get json() { throw new Error('jeton-secret-dans-erreur'); } });
+    await assert.rejects(plugin.connecterMoodle('https://moodle.exemple.fr', 'factice'), (e) => {
+      assert.match(e.message, new RegExp('HTTP ' + status));
+      assert.doesNotMatch(e.message, /Ton jeton Moodle est invalide|jeton-secret-dans-erreur/);
+      return true;
+    });
+  }
 });
 
 async function moodleSimule() {
