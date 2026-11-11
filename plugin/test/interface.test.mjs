@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 function charger(etat, navigateur = {}) {
-  const rendu = { textes: [], boutons: new Map(), elements: [], champs: [], ouvertures: 0 };
+  const rendu = { textes: [], boutons: new Map(), elements: [], champs: [], ouvertures: 0, commandes: new Map(), notices: [] };
   const container = (racine = true) => ({
     enfants: [],
     empty() {
@@ -34,7 +34,7 @@ function charger(etat, navigateur = {}) {
       addStatusBarItem() { return { setText() {} }; }
       addSettingTab(tab) { this.onglet = tab; }
       addRibbonIcon(id, label, callback) { this.ruban = { id, label, callback }; }
-      addCommand() {}
+      addCommand(commande) { rendu.commandes.set(commande.id, commande); }
       registerObsidianProtocolHandler(action, callback) { this.protocole = { action, callback }; }
       registerInterval(callback) { this.intervalle = callback; }
     },
@@ -57,7 +57,7 @@ function charger(etat, navigateur = {}) {
     TFile: class {},
     TFolder: class {},
     addIcon(id, svg) { rendu.icone = { id, svg }; },
-    Notice: class { constructor(text) { rendu.notice = text; } },
+    Notice: class { constructor(text) { rendu.notice = text; rendu.notices.push(text); } },
   };
   const context = { require: () => obsidian, module: { exports: {} }, TextEncoder, TextDecoder, clearTimeout, URL, URLSearchParams, atob, window: { setInterval: callback => callback }, ...navigateur };
   vm.runInNewContext(readFileSync(new URL('../main.js', import.meta.url), 'utf8'), context);
@@ -626,6 +626,7 @@ test('présence : on voit qui est en ligne et sur quelle note, et une note priv�
   plugin.app.workspace.getActiveFile = () => ({ path: 'Cours.md' });
   await plugin.onload();
   let barre = ''; plugin.barre.setText = (t) => { barre = t; };
+  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Autre.md' }]);
   plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours.md' }]);
   assert.match(rendu.notice, /Paulo est aussi sur cette note/);
   assert.match(barre, /Paulo en ligne/);
@@ -639,10 +640,123 @@ test('présence : on voit qui est en ligne et sur quelle note, et une note priv�
   plugin.etat.presenceMasquee = true;
   await plugin.annoncerPresence('Cours.md');
   assert.equal(envois[2].parti, true, 'présence masquée : on part');
+  assert.equal(envois[2].masquee, true, 'le serveur masque aussi la dernière activité');
   plugin.moteur.api = async () => { throw Object.assign(new Error('absent'), { statut: 404 }); };
   plugin.etat.presenceMasquee = false;
   await plugin.annoncerPresence('Cours.md');
   assert.equal(plugin.presenceIndisponible, true, 'ancien serveur : on n’insiste pas');
+});
+
+test('les dernières visites se lisent en minutes, heures et jours, sans inventer une première connexion', () => {
+  const { interne } = charger({});
+  const maintenant = new Date(2026, 4, 12, 15).getTime();
+  assert.equal(interne.derniereActivite(null, maintenant), 'pas encore connecté');
+  assert.equal(interne.derniereActivite(undefined, maintenant), 'pas encore connecté');
+  assert.equal(interne.derniereActivite(NaN, maintenant), 'pas encore connecté');
+  assert.equal(interne.derniereActivite(maintenant - 12 * 60_000, maintenant), 'vu il y a 12 min');
+  assert.equal(interne.derniereActivite(maintenant - 2 * 3600_000, maintenant), 'vu il y a 2 h');
+  assert.equal(interne.derniereActivite(new Date(2026, 4, 11, 23).getTime(), maintenant), 'vu hier');
+  assert.equal(interne.derniereActivite(maintenant - 3 * 86400_000, maintenant), 'vu il y a 3 j');
+  assert.equal(interne.derniereActivite(maintenant - 10 * 86400_000, maintenant), `vu ${new Date(maintenant - 10 * 86400_000).toLocaleDateString('fr-FR')}`);
+  assert.equal(interne.resumePresence([{ id: 'moi', nom: 'Moi' }, { id: 'b', nom: 'Paulo', vu_le: maintenant - 2 * 3600_000 }], [], 'moi', maintenant), 'Personne d’autre en ligne · Paulo vu il y a 2 h');
+});
+
+test('les arrivées se détectent par identifiant, une seule fois et à partir du premier résultat réussi', () => {
+  const { interne } = charger({});
+  const ami = { id: 'b', nom: 'Paulo' }, autre = { id: 'c', nom: 'Paulo' };
+  const maintenant = 1_800_000_000_000;
+  assert.equal(interne.arriveesPresence(null, [ami], {}, maintenant).length, 0);
+  assert.equal(interne.arriveesPresence([], [ami, ami], {}, maintenant).length, 1);
+  assert.equal(interne.arriveesPresence([ami], [ami, autre], {}, maintenant)[0].id, 'c');
+  assert.equal(interne.arriveesPresence([ami], [], {}, maintenant).length, 0);
+  assert.equal(interne.arriveesPresence([], [ami], {}, maintenant, false).length, 0);
+  assert.equal(interne.arriveesPresence([], [ami], { ':b': maintenant - 30 * 60_000 + 1 }, maintenant).length, 0);
+  assert.equal(interne.arriveesPresence([], [ami], { ':b': maintenant - 30 * 60_000 }, maintenant).length, 1);
+});
+
+test('connexion d’un ami : pas d’alerte au démarrage, anti-répétition conservée après redémarrage', async () => {
+  let horloge = 1_800_000_000_000;
+  const navigateur = { Date: class extends Date { static now() { return horloge; } }, setTimeout: (f) => { f(); return 0; } };
+  const { plugin, rendu } = charger({ ...ETAT_TEST }, navigateur);
+  await plugin.onload();
+  plugin.app.workspace.getActiveFile = () => ({ path: 'Cours.md' });
+  const ami = { id: 'b', nom: 'Paulo', chemin: 'Cours.md' };
+  plugin.majPresence([ami]);
+  assert.deepEqual(rendu.notices, [], 'aucune notification pour un ami déjà là au démarrage');
+  plugin.majPresence([]);
+  plugin.majPresence([ami]);
+  assert.deepEqual(rendu.notices, ['Paulo vient de se connecter']);
+  plugin.majPresence([ami]);
+  plugin.majPresence([]);
+  horloge += 29 * 60_000;
+  plugin.majPresence([ami]);
+  assert.equal(rendu.notices.length, 1, 'un retour rapide sur la même note reste silencieux');
+  const redemarrage = charger(rendu.sauvegarde, navigateur);
+  await redemarrage.plugin.onload();
+  redemarrage.plugin.majPresence([]);
+  redemarrage.plugin.majPresence([ami]);
+  assert.equal(redemarrage.rendu.notices.length, 0, 'la limite survit au redémarrage');
+  redemarrage.plugin.majPresence([]);
+  horloge += 60_000;
+  redemarrage.plugin.majPresence([ami]);
+  assert.deepEqual(redemarrage.rendu.notices, ['Paulo vient de se connecter']);
+});
+
+test('la commande désactive les alertes, garde le choix et ne signale pas un ami déjà présent à la réactivation', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST }, { setTimeout: (f) => { f(); return 0; } });
+  await plugin.onload();
+  plugin.app.workspace.getActiveFile = () => ({ path: 'Cours.md' });
+  const commande = rendu.commandes.get('prevenir-connexions');
+  assert.match(commande.name, /Prévenir quand un ami se connecte/);
+  await commande.callback();
+  assert.equal(rendu.sauvegarde.prevenirConnexions, false);
+  const notices = rendu.notices.length;
+  plugin.majPresence([]);
+  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours.md' }]);
+  assert.equal(rendu.notices.length, notices);
+  await commande.callback();
+  assert.equal(rendu.sauvegarde.prevenirConnexions, true);
+  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours.md' }]);
+  assert.equal(rendu.notices.filter((n) => n === 'Paulo vient de se connecter').length, 0);
+  plugin.majPresence([]);
+  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: null }]);
+  assert.equal(rendu.notices.at(-1), 'Paulo vient de se connecter');
+});
+
+test('le panneau affiche les amis présents, leur note et leurs dernières visites, puis suit un départ', async () => {
+  const maintenant = new Date(2026, 4, 12, 15).getTime();
+  const { plugin, rendu } = charger({ ...ETAT_TEST }, { Date: class extends Date { static now() { return maintenant; } }, setTimeout: (f) => { f(); return 0; } });
+  await plugin.onload();
+  plugin.moteur.api = async () => ({ json: async () => ({ rev: 1, moiId: 'moi', changements: [], membres: [
+    { id: 'moi', nom: 'Moi' }, { id: 'b', nom: 'Paulo', vu_le: maintenant - 12 * 60_000 },
+    { id: 'c', nom: 'Camille', vu_le: new Date(2026, 4, 11, 23).getTime() }, { id: 'd', nom: 'Alex', vu_le: null },
+  ] }) });
+  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours/TD.md' }]);
+  await plugin.ruban.callback();
+  await rendu.modal.tableau.chargement;
+  const statuts = () => rendu.elements.filter((e) => e.attrs.cls === 'cordee-presence-membre');
+  assert.ok(rendu.textes.includes('Paulo est en ligne'));
+  assert.ok(statuts().some((e) => e.textContent === 'en ligne · sur TD.md' && e.attrs.attr['data-en-ligne'] === 'true'));
+  assert.ok(statuts().some((e) => e.textContent === 'vu hier'));
+  assert.ok(statuts().some((e) => e.textContent === 'pas encore connecté'));
+  plugin.majPresence([]);
+  await new Promise((ok) => setImmediate(ok));
+  assert.ok(statuts().some((e) => e.textContent === 'vu il y a 12 min'));
+  assert.ok(rendu.textes.includes('Personne d’autre en ligne · Paulo vu il y a 12 min'));
+});
+
+test('la barre d’état ajoute une pastille aux noms en ligne et la retire au départ', async () => {
+  const { plugin, rendu, interne } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  await plugin.ruban.callback();
+  const barre = rendu.modal.contentEl;
+  interne.afficherBarrePresence(barre, 'Cordée : prêt', ['Paulo']);
+  assert.equal(barre.enfants.find((e) => e.attrs.cls === 'cordee-presence-barre').textContent, 'Paulo en ligne');
+  // Le vrai setText d'Obsidian remplace les enfants de la barre.
+  barre.setText = function (texte) { this.enfants = []; this.textContent = texte; };
+  interne.afficherBarrePresence(barre, 'Cordée : prêt', []);
+  assert.equal(barre.enfants.length, 0);
+  assert.equal(barre.textContent, 'Cordée : prêt');
 });
 
 test('un ami modifie la note ouverte : une alerte le dit, ses lignes sont « à voir »', async () => {
