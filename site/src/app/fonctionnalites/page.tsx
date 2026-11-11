@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Activity, ArrowRight, Command, FolderTree, PanelLeft, RefreshCw, ShieldCheck, Users } from "lucide-react";
+import { Activity, ArrowRight, CalendarDays, Command, FolderTree, PanelLeft, RefreshCw, ShieldCheck, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { groupes, ouTrouver, versions, VERSION_EXTENSION } from "@/lib/extension";
@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   description: "Tout ce que fait l’extension Cordée, où le trouver dans Obsidian, et ce qui change à chaque version.",
 };
 
-const icones = { synchro: RefreshCw, fichiers: FolderTree, groupe: Users, securite: ShieldCheck };
+const icones = { semaine: CalendarDays, synchro: RefreshCw, fichiers: FolderTree, groupe: Users, securite: ShieldCheck };
 const iconesAcces = [PanelLeft, Command, Activity];
 
 export default function FonctionnalitesPage() {

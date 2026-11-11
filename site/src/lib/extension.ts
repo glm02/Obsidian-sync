@@ -3,12 +3,24 @@
  * Source : le code de plugin/main.js et CHANGELOG.md. À mettre à jour à chaque version
  * (la version doit suivre manifest.json, sinon le site annonce une version qui n'existe pas).
  */
-export const VERSION_EXTENSION = "0.2.0";
+export const VERSION_EXTENSION = "0.3.0";
 
 export type Fonction = { titre: string; texte: string };
 export type Groupe = { id: string; titre: string; resume: string; fonctions: Fonction[] };
 
 export const groupes: Groupe[] = [
+  {
+    id: "semaine",
+    titre: "La semaine",
+    resume: "Cours, devoirs et révisions au même endroit.",
+    fonctions: [
+      { titre: "Emploi du temps", texte: "Colle le lien iCal de ton emploi du temps (ADE, Hyperplanning…) dans les réglages : tes cours s’affichent dans la vue Semaine, en grille sur ordinateur et en liste sur téléphone." },
+      { titre: "Devoirs Moodle", texte: "Le lien « Exporter le calendrier » de Moodle ajoute tes devoirs à rendre, avec leur heure limite. Pas besoin de ton mot de passe." },
+      { titre: "Agenda de la cordée", texte: "Un créneau ajouté (révision, projet, rendu) apparaît chez tout le monde. C’est une simple note partagée, modifiable à la main." },
+      { titre: "Aujourd’hui", texte: "En tête du panneau Cordée : les cours qui restent aujourd’hui et les devoirs de la semaine." },
+      { titre: "Liens privés", texte: "Tes liens de calendrier restent sur ton appareil : ils ne sont ni synchronisés ni partagés, et ne s’affichent que par leur domaine." },
+    ],
+  },
   {
     id: "synchro",
     titre: "La synchronisation",
@@ -71,6 +83,16 @@ export const ouTrouver: Fonction[] = [
 export type Version = { version: string; titre: string; points: string[] };
 
 export const versions: Version[] = [
+  {
+    version: "0.3.0",
+    titre: "La semaine de la cordée",
+    points: [
+      "Une vue Semaine : ton emploi du temps (lien iCal), tes devoirs Moodle à rendre et l’agenda de la cordée au même endroit.",
+      "« Ajouter un créneau » : révision, projet, rendu… visible dans la semaine de chaque membre.",
+      "« Aujourd’hui » en tête du panneau : les cours qui restent et les devoirs de la semaine.",
+      "Tes liens de calendrier restent sur ton appareil, jamais partagés.",
+    ],
+  },
   {
     version: "0.2.0",
     titre: "La V2 : ensemble, en direct",

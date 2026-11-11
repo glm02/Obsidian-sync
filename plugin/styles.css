@@ -142,8 +142,103 @@
 .cordee-bouton-danger:hover { background: color-mix(in srgb, var(--color-red) 12%, transparent); color: var(--color-red); }
 .cordee-historique { margin-top: var(--size-4-3); }
 
+/* ---------- Boutons : passer devant les règles d'Obsidian ----------
+ * Obsidian impose à tous les boutons (button:not(.clickable-icon)) une hauteur fixe, un fond, une ombre,
+ * un contenu centré sur une ligne. Nos lignes de liste sont des boutons sur plusieurs lignes : sans ces
+ * règles plus précises, elles s'écrasent les unes sur les autres. */
+button.cordee-bouton:not(.clickable-icon) { height: auto; min-height: 30px; padding: 4px 12px; line-height: 1.3; white-space: nowrap; }
+button.cordee-bouton-principal:not(.clickable-icon) { background-color: var(--interactive-accent); color: var(--text-on-accent); box-shadow: none; }
+button.cordee-bouton-principal:not(.clickable-icon):hover { background-color: var(--interactive-accent-hover); }
+button.cordee-bouton-discret:not(.clickable-icon) { background-color: transparent; box-shadow: none; border: 1px solid var(--background-modifier-border); color: var(--text-muted); }
+button.cordee-bouton-discret:not(.clickable-icon):hover { background-color: var(--background-modifier-hover); color: var(--text-normal); }
+button.cordee-bouton-danger:not(.clickable-icon) { border-color: var(--color-red); color: var(--color-red); }
+button.cordee-fichier:not(.clickable-icon) {
+  display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: center; justify-content: stretch; gap: var(--size-4-3);
+  width: 100%; height: auto; min-height: 0; padding: 8px 12px; border: 0; border-bottom: 1px solid var(--background-modifier-border);
+  border-radius: 0; background-color: transparent; box-shadow: none; line-height: 1.35; white-space: normal; text-align: start;
+}
+button.cordee-fichier:not(.clickable-icon):last-child { border-bottom: 0; }
+button.cordee-fichier:not(.clickable-icon):hover:not([disabled]) { background-color: var(--background-modifier-hover); }
+button.cordee-a-voir-ouvrir:not(.clickable-icon) {
+  display: flex; flex: 1; flex-direction: column; align-items: flex-start; justify-content: center; gap: 2px; min-width: 0;
+  height: auto; padding: 2px 0; border: 0; background-color: transparent; box-shadow: none; line-height: 1.35; white-space: normal; text-align: start;
+}
+button.cordee-collegue:not(.clickable-icon) {
+  display: inline-flex; align-items: center; gap: var(--size-4-2); height: auto; padding: 6px 12px 6px 6px;
+  border: 1px solid var(--background-modifier-border); border-radius: 999px; background-color: transparent; box-shadow: none; line-height: 1.3; white-space: normal; text-align: start;
+}
+button.cordee-collegue-tous:not(.clickable-icon) { flex-direction: column; align-items: flex-start; gap: 0; padding-inline-start: 12px; }
+button.cordee-collegue:not(.clickable-icon):hover { background-color: var(--background-modifier-hover); }
+button.cordee-collegue[aria-pressed="true"]:not(.clickable-icon) { border-color: var(--interactive-accent); background-color: color-mix(in srgb, var(--interactive-accent) 12%, transparent); }
+button.cordee-etiquette-vu:not(.clickable-icon) { height: auto; padding: 0 8px; border: 0; border-radius: 999px; box-shadow: none; background-color: var(--cordee-couleur, var(--interactive-accent)); color: var(--text-on-accent); font-size: var(--font-ui-smaller); line-height: 1.6; }
+.cordee-vue button.cordee-fichier:not(.clickable-icon) { grid-template-columns: 24px minmax(0, 1fr) auto; gap: var(--size-4-2); padding: 7px 10px; }
+
+/* ---------- La semaine : emploi du temps, Moodle, agenda de la cordée ---------- */
+.cordee-semaine { container-type: inline-size; display: flex; flex-direction: column; gap: var(--size-4-3); padding: var(--size-4-2) var(--size-4-2) var(--size-4-4); }
+.cordee-semaine-tete { display: flex; flex-wrap: wrap; align-items: center; gap: var(--size-4-3); }
+.cordee-semaine-tete .cordee-titre { flex: 1; min-width: 200px; margin: 0; }
+.cordee-legende { display: flex; flex-wrap: wrap; gap: var(--size-4-3); color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.cordee-legende-source::before { content: ""; display: inline-block; width: 9px; height: 9px; margin-inline-end: 6px; border-radius: 3px; background: var(--cordee-couleur); vertical-align: -1px; }
+.cordee-semaine-vide { display: flex; flex-direction: column; align-items: flex-start; gap: var(--size-4-2); padding: var(--size-4-3) var(--size-4-4); border: 1px dashed var(--background-modifier-border); border-radius: var(--radius-m); }
+.cordee-semaine-vide p { margin: 0; }
+
+.cordee-grille { display: grid; grid-template-columns: 46px repeat(7, minmax(0, 1fr)); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); overflow: hidden; background: var(--background-primary); }
+.cordee-grille-coin, .cordee-grille-jour { padding: 8px 4px; border-bottom: 1px solid var(--background-modifier-border); background: var(--background-secondary); color: var(--text-muted); font-size: var(--font-ui-small); text-align: center; text-transform: capitalize; }
+.cordee-grille-jour.cordee-aujourdhui { color: var(--text-normal); font-weight: var(--font-semibold); box-shadow: inset 0 -2px 0 var(--interactive-accent); }
+.cordee-grille-legende { padding-inline-end: 6px; background: transparent; color: var(--text-faint); font-size: 10px; text-align: end; text-transform: none; }
+.cordee-grille-journee { display: flex; flex-direction: column; gap: 3px; min-width: 0; min-height: 30px; padding: 4px; border-bottom: 1px solid var(--background-modifier-border); border-inline-start: 1px solid var(--background-modifier-border); }
+.cordee-grille-heure { box-sizing: border-box; height: 44px; padding: 2px 6px 0 0; color: var(--text-faint); font-size: 10px; text-align: end; }
+.cordee-grille-colonne { position: relative; height: calc(var(--cordee-heures, 13) * 44px); border-inline-start: 1px solid var(--background-modifier-border);
+  background-image: repeating-linear-gradient(to bottom, transparent 0 43px, var(--background-modifier-border) 43px 44px); }
+.cordee-grille-colonne.cordee-aujourdhui { background-color: color-mix(in srgb, var(--interactive-accent) 5%, transparent); }
+.cordee-maintenant { position: absolute; z-index: 2; left: 0; right: 0; height: 2px; background: var(--color-red); pointer-events: none; }
+.cordee-maintenant::before { content: ""; position: absolute; top: -3px; left: -4px; width: 8px; height: 8px; border-radius: 50%; background: var(--color-red); }
+
+button.cordee-evenement:not(.clickable-icon) {
+  position: absolute; box-sizing: border-box; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 1px;
+  min-height: 0; margin: 0; padding: 3px 6px; border: 1px solid var(--background-primary); border-radius: 6px; overflow: hidden;
+  background-color: color-mix(in srgb, var(--cordee-couleur) 24%, var(--background-primary)); box-shadow: inset 3px 0 0 var(--cordee-couleur);
+  color: var(--text-normal); font-size: var(--font-ui-smaller); line-height: 1.25; text-align: start; white-space: normal; cursor: pointer;
+}
+button.cordee-evenement:not(.clickable-icon):hover { background-color: color-mix(in srgb, var(--cordee-couleur) 36%, var(--background-primary)); z-index: 1; }
+.cordee-evenement strong { max-width: 100%; overflow: hidden; font-weight: var(--font-semibold); text-overflow: ellipsis; white-space: nowrap; }
+.cordee-evenement span { max-width: 100%; overflow: hidden; color: var(--text-muted); text-overflow: ellipsis; white-space: nowrap; }
+button.cordee-pastille:not(.clickable-icon) {
+  display: block; width: 100%; height: auto; min-height: 0; padding: 2px 6px; border: 0; border-radius: 4px; overflow: hidden; box-shadow: none;
+  background-color: color-mix(in srgb, var(--cordee-couleur) 24%, transparent); color: var(--text-normal); font-size: 11px; line-height: 1.4; text-align: start; text-overflow: ellipsis; white-space: nowrap;
+}
+button.cordee-echeance:not(.clickable-icon) { border: 1px dashed var(--cordee-couleur); background-color: transparent; color: var(--cordee-couleur); }
+
+.cordee-liste-semaine { display: none; flex-direction: column; gap: var(--size-4-3); }
+.cordee-liste-jour h3 { margin: 0 0 6px; color: var(--text-muted); font-size: var(--font-ui-small); font-weight: var(--font-semibold); }
+.cordee-liste-jour h3::first-letter { text-transform: uppercase; }
+.cordee-liste-jour.cordee-aujourdhui h3 { color: var(--interactive-accent); }
+.cordee-liste-jour .cordee-vide { margin: 0; }
+.cordee-aujourdhui-liste { display: flex; flex-direction: column; gap: 4px; }
+button.cordee-evenement-ligne:not(.clickable-icon) {
+  display: flex; align-items: flex-start; justify-content: flex-start; gap: 10px; width: 100%; height: auto; min-height: 0; margin: 0 0 4px; padding: 7px 10px;
+  border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); background-color: transparent; box-shadow: inset 3px 0 0 var(--cordee-couleur);
+  line-height: 1.35; text-align: start; white-space: normal; cursor: pointer;
+}
+button.cordee-evenement-ligne:not(.clickable-icon):hover { background-color: var(--background-modifier-hover); }
+.cordee-aujourdhui-liste button.cordee-evenement-ligne:not(.clickable-icon) { margin: 0; }
+.cordee-evenement-heure { flex: none; min-width: 86px; color: var(--text-muted); font-size: var(--font-ui-smaller); font-variant-numeric: tabular-nums; }
+.cordee-evenement-texte { display: flex; flex-direction: column; min-width: 0; }
+.cordee-evenement-texte strong { font-weight: var(--font-medium); overflow-wrap: anywhere; }
+@container (max-width: 640px) {
+  .cordee-grille { display: none; }
+  .cordee-liste-semaine { display: flex; }
+}
+
+.cordee-evenement-quand { margin: 4px 0 8px; font-weight: var(--font-medium); }
+.cordee-evenement-description { max-height: 30vh; overflow: auto; padding: 8px 12px; border-radius: var(--radius-m); background: var(--background-secondary); color: var(--text-muted); font-size: var(--font-ui-small); white-space: pre-wrap; }
+.cordee-formulaire { display: grid; grid-template-columns: 1fr 1fr; gap: var(--size-4-3); margin-top: var(--size-4-3); }
+.cordee-champ { display: flex; flex-direction: column; gap: 4px; color: var(--text-muted); font-size: var(--font-ui-small); }
+.cordee-champ:first-child, .cordee-champ:last-child { grid-column: 1 / -1; }
+.cordee-champ input { width: 100%; }
+
 @media (max-width: 480px) {
-  .cordee-fichier { grid-template-columns: 24px minmax(0, 1fr); }
+  .cordee-fichier, button.cordee-fichier:not(.clickable-icon) { grid-template-columns: 24px minmax(0, 1fr); }
   .cordee-type-changement { display: none; }
   .cordee-etiquette { display: none; } /* sur petit écran l'étiquette gênerait la lecture : le surlignage suffit */
 }

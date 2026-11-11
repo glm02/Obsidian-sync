@@ -1,5 +1,15 @@
 # Nouveautés
 
+## 0.3.0
+
+- **La semaine** : une vue calendrier (icône calendrier ou commande « Ouvrir la semaine ») avec ton emploi du temps, tes devoirs Moodle et l’agenda de la cordée. Grille avec les heures et le trait « maintenant » sur ordinateur, liste par jour sur téléphone. Semaine précédente / suivante, cours qui se chevauchent côte à côte.
+- **Emploi du temps** : colle le lien iCal de ton emploi du temps (ADE, Hyperplanning…) dans Réglages → Cordée → Calendriers. Répétitions (hebdomadaires, quotidiennes, exceptions) prises en compte ; dernière version gardée si le réseau manque ; actualisation toutes les 30 minutes.
+- **Moodle** : le lien « Exporter le calendrier » de Moodle affiche tes devoirs « À rendre » (en pointillés), sans donner ton mot de passe.
+- **Agenda de la cordée** : « Ajouter un créneau » (révision, projet, rendu…) écrit une ligne dans la note partagée « Agenda de la cordée » : le créneau apparaît dans la semaine de chaque membre. Depuis un cours : « Proposer ce créneau à la cordée » ou « Créer une note partagée » (dossier Agenda).
+- **Aujourd’hui** en tête du panneau Cordée : les cours qui restent et les devoirs de la semaine.
+- **Liens privés** : les liens iCal restent dans les réglages de cet appareil (jamais synchronisés, jamais partagés) et ne s’affichent que par leur domaine.
+- Boutons du panneau : plus de lignes écrasées par les règles de boutons d’Obsidian.
+
 ## 0.2.0
 
 - **Panneau toujours visible** dans la barre latérale droite (icône Cordée, barre d’état ou commande) : état, « À voir », membres et activité, qui se mettent à jour tout seuls.

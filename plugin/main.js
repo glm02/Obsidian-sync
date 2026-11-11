@@ -423,7 +423,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -433,7 +433,7 @@ function comparerVersions(a, b) {
   return 0;
 }
 
-const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiers: {}, enAttente: {}, aVoir: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null };
+const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiers: {}, enAttente: {}, aVoir: {}, calendriers: [], cacheCalendriers: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null };
 
 function expliquerErreur(erreur) {
   if ([401, 403].includes(erreur?.statut)) return 'Accès refusé. Ton accès au coffre a peut-être été retiré : demande une nouvelle invitation.';
@@ -604,6 +604,9 @@ function fichiersObsidian(app) {
 
 let InvitationModal, ActiviteModal, RevisionModal, ProfilModal, ReglagesCordee, PanneauCordee, VuePanneau, HistoriqueModal;
 const VUE_CORDEE = 'cordee-panneau';
+const VUE_SEMAINE = 'cordee-semaine';
+let VueSemaine, EvenementModal, CreneauModal, dessinerSemaine;
+const identifiantLocal = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
 
 class CordeePlugin extends (O ? O.Plugin : Object) {
   async onload() {
@@ -616,12 +619,15 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.fichiersBloques = new Map();
     this.dossiersEnAttente = new Set();
     this.etat.aVoir = this.nettoyerAVoir(this.etat.aVoir);
+    this.etat.calendriers = [...(this.etat.calendriers || [])];
+    this.etat.cacheCalendriers = { ...(this.etat.cacheCalendriers || {}) };
+    this.abonnesCalendrier = new Set();
     this.barre = this.addStatusBarItem();
     // La barre d'état ouvre le panneau : c'est là qu'on regarde quand quelque chose a bougé.
     this.barre.addClass?.('mod-clickable');
     this.barre.onClickEvent?.(() => this.ouvrirPanneau());
     this.presence = [];
-    if (O.ItemView && this.registerView) this.registerView(VUE_CORDEE, (leaf) => new VuePanneau(leaf, this));
+    if (O.ItemView && this.registerView) { this.registerView(VUE_CORDEE, (leaf) => new VuePanneau(leaf, this)); this.registerView(VUE_SEMAINE, (leaf) => new VueSemaine(leaf, this)); }
     this.moteur = this.creerMoteur();
     this.afficher('');
     const surlignage = creerExtensionSurlignage(this);
@@ -632,9 +638,12 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     }
     this.addSettingTab(new ReglagesCordee(this.app, this));
     O.addIcon('cordee-logo', ICONE_CORDEE);
+    this.addRibbonIcon('calendar-days', 'Cordée — la semaine', () => this.ouvrirSemaine());
     this.addRibbonIcon('cordee-logo', 'Cordée — ouvrir le partage', () => this.ouvrirPanneau());
     this.addCommand({ id: 'ouvrir', name: 'Ouvrir le panneau de partage', callback: () => this.ouvrirPanneau() });
     this.addCommand({ id: 'historique', name: 'Historique de cette note (versions, restauration)', callback: () => { const f = this.app.workspace.getActiveFile?.(); if (f) new HistoriqueModal(this.app, this, f.path).open(); else new O.Notice('Ouvre d’abord une note.'); } });
+    this.addCommand({ id: 'semaine', name: 'Ouvrir la semaine (emploi du temps, Moodle, agenda de la cordée)', callback: () => this.ouvrirSemaine() });
+    this.addCommand({ id: 'creneau', name: 'Ajouter un créneau à l’agenda de la cordée', callback: () => new CreneauModal(this.app, this).open() });
     this.addCommand({ id: 'presence', name: 'Montrer ou masquer aux autres la note que j’ouvre', callback: () => this.basculerPresence() });
     this.addCommand({ id: 'synchroniser', name: 'Synchroniser maintenant', callback: () => this.lancer({ forcer: true }) });
     this.addCommand({ id: 'confirmer-suppressions', name: 'Confirmer les suppressions en attente (aussi chez les amis)', callback: () => this.confirmerSuppressions() });
@@ -667,6 +676,9 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
         menu.addItem((item) => item.setTitle('Historique Cordée').setIcon('history').onClick(() => new HistoriqueModal(this.app, this, f.path).open()));
       }));
       this.annoncerPresence(this.app.workspace.getActiveFile?.()?.path ?? null);
+      this.actualiserCalendriers();
+      this.registerInterval(window.setInterval(() => this.actualiserCalendriers(), 30 * 60_000));
+      this.registerEvent(this.app.vault.on('modify', (f) => { if (f?.path === NOTE_AGENDA) this.rafraichirCalendrier(); }));
       this.registerInterval(window.setInterval(() => this.lancer(), 5 * 60_000)); // filet de sécurité
       this.ecouter();
       this.lancer();
@@ -793,6 +805,114 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     if (this.etat.aVoir[chemin]) delete this.etat.aVoir[chemin];
     this.rafraichirMarques(0);
     this.programmer(800);
+  }
+
+  /* ---------- Calendrier ---------- */
+
+  async ouvrirSemaine() {
+    const ws = this.app.workspace;
+    if (!O.ItemView || !ws.getLeavesOfType || !ws.getLeaf) { new O.Notice('La vue semaine demande une version plus récente d’Obsidian.'); return; }
+    let leaf = ws.getLeavesOfType(VUE_SEMAINE)[0];
+    if (!leaf) { leaf = ws.getLeaf('tab'); await leaf.setViewState({ type: VUE_SEMAINE, active: true }); }
+    ws.revealLeaf(leaf);
+  }
+
+  surCalendrier(f) { this.abonnesCalendrier.add(f); return () => this.abonnesCalendrier.delete(f); }
+  rafraichirCalendrier() { for (const f of this.abonnesCalendrier) { try { f(); } catch { /* une vue fermée ne doit pas gêner les autres */ } } }
+
+  /** Lit un lien iCal par le réseau d'Obsidian (pas de souci de CORS, marche sur mobile). Le lien n'est jamais affiché ni journalisé. */
+  async lireUrlCalendrier(url) {
+    const r = await O.requestUrl({ url: String(url).replace(/^webcal:/i, 'https:'), throw: false });
+    if (r.status >= 400) throw Object.assign(new Error(`le serveur du calendrier répond ${r.status}`), { statut: r.status });
+    const texte = r.text || '';
+    if (!/BEGIN:VCALENDAR/.test(texte)) throw new Error('ce lien ne renvoie pas un calendrier iCal');
+    return texte;
+  }
+
+  async ajouterCalendrier(nom, url) {
+    const lien = String(url || '').trim();
+    if (!/^(https?|webcal):\/\/\S+$/i.test(lien)) throw new Error('Colle un lien iCal complet, qui commence par https:// ou webcal://');
+    const source = { id: identifiantLocal(), nom: String(nom || '').trim().slice(0, 40) || ({ moodle: 'Moodle', edt: 'Emploi du temps' }[typeCalendrier(lien)] || 'Calendrier'), url: lien, type: typeCalendrier(lien) };
+    this.etat.calendriers.push(source);
+    await this.saveData(this.etat);
+    await this.actualiserCalendriers({ forcer: true, seulement: source.id });
+    return source;
+  }
+
+  async retirerCalendrier(id) {
+    this.etat.calendriers = this.etat.calendriers.filter((s) => s.id !== id);
+    delete this.etat.cacheCalendriers[id];
+    await this.saveData(this.etat);
+    this.rafraichirCalendrier();
+  }
+
+  /** Recharge les calendriers (au plus toutes les 25 min, sauf demande) ; garde la dernière version si le réseau manque. */
+  async actualiserCalendriers({ forcer = false, seulement = null } = {}) {
+    if (this.calendriersEnCours) return this.calendriersEnCours;
+    this.calendriersEnCours = (async () => {
+      for (const s of this.etat.calendriers) {
+        if (seulement && s.id !== seulement) continue;
+        const cache = this.etat.cacheCalendriers[s.id];
+        if (!forcer && cache?.maj && Date.now() - cache.maj < 25 * 60_000) continue;
+        try {
+          const evts = lireIcs(await this.lireUrlCalendrier(s.url))
+            .map((e) => ({ titre: e.titre || 'Sans titre', lieu: e.lieu || '', description: (e.description || '').slice(0, 600), debut: e.debut, fin: e.fin, journee: !!e.journee, rrule: e.rrule, exdates: e.exdates }))
+            .slice(0, 5000);
+          this.etat.cacheCalendriers[s.id] = { maj: Date.now(), evenements: evts, erreur: null };
+        } catch (e) {
+          this.etat.cacheCalendriers[s.id] = { ...(cache || { evenements: [] }), erreur: e?.message || 'lecture impossible', essai: Date.now() };
+        }
+      }
+      try { await this.saveData(this.etat); } catch { /* le cache se refera */ }
+    })();
+    try { await this.calendriersEnCours; } finally { this.calendriersEnCours = null; this.rafraichirCalendrier(); }
+  }
+
+  /** Tous les événements de [de, a[ : calendriers iCal de cet appareil + agenda de la cordée (note partagée). */
+  async evenementsEntre(de, a) {
+    const tous = [];
+    for (const s of this.etat.calendriers) {
+      const cache = this.etat.cacheCalendriers[s.id];
+      for (const e of developper(cache?.evenements || [], de, a)) tous.push({ ...e, source: s.nom, type: s.type, couleur: COULEURS_CALENDRIER[s.type] || COULEURS_CALENDRIER.autre });
+    }
+    const note = this.app.vault.getAbstractFileByPath?.(NOTE_AGENDA);
+    if (note && (!O.TFile || note instanceof O.TFile)) {
+      try {
+        for (const e of lireAgendaPartage(await this.app.vault.cachedRead(note))) if (e.fin > de && e.debut < a) tous.push({ ...e, source: 'Agenda de la cordée', type: 'cordee', couleur: COULEURS_CALENDRIER.cordee });
+      } catch { /* note en cours d'écriture : elle reviendra au prochain affichage */ }
+    }
+    return tous.sort((x, y) => x.debut - y.debut);
+  }
+
+  ouvrirReglages() {
+    const reglages = this.app.setting;
+    if (reglages?.open) { reglages.open(); reglages.openTabById?.(this.manifest?.id || 'cordee'); }
+    else new O.Notice('Ouvre Réglages → Cordée → Calendriers.');
+  }
+
+  /** Une note partagée pour un cours ou un créneau (dossier Agenda), pour y écrire à plusieurs. */
+  async creerNoteEvenement(e) {
+    const titre = String(e.titre || 'Événement').replace(/[\\/:*?"<>|#^[\]]/g, '-').replace(/\s+/g, ' ').trim().slice(0, 80);
+    const chemin = `Agenda/${jourIso(e.debut)} ${titre}.md`;
+    const vault = this.app.vault;
+    if (!vault.getAbstractFileByPath(chemin)) {
+      if (!vault.getAbstractFileByPath('Agenda')) { try { await vault.createFolder('Agenda'); } catch { /* déjà créé entre-temps */ } }
+      const quand = e.journee ? jourIso(e.debut) : `${jourIso(e.debut)} ${heure(e.debut)}–${heure(e.fin)}`;
+      await vault.create(chemin, `# ${e.titre || 'Événement'}\n\n- Quand : ${quand}\n${e.lieu ? `- Où : ${e.lieu}\n` : ''}- Source : ${e.source || 'calendrier'}\n\n## Notes\n\n`);
+    }
+    await this.app.workspace.openLinkText(chemin, '', false);
+    return chemin;
+  }
+
+  /** Ajoute un créneau à l'agenda de la cordée : une ligne dans une note partagée, donc visible par tous. */
+  async ajouterCreneau(creneau) {
+    const ligne = ligneAgenda({ ...creneau, auteur: this.etat.prenom || '' });
+    const vault = this.app.vault;
+    const note = vault.getAbstractFileByPath(NOTE_AGENDA);
+    if (note) await vault.process(note, (t) => t.replace(/\s*$/, '\n') + ligne + '\n');
+    else await vault.create(NOTE_AGENDA, `# Agenda de la cordée\n\nUne ligne par créneau, visible par toute la cordée dans la vue Semaine de Cordée.\nFormat : - AAAA-MM-JJ HH:MM-HH:MM Titre @ Lieu\n\n${ligne}\n`);
+    this.rafraichirCalendrier();
+    return ligne;
   }
 
   /** Ouvre la note et place le curseur sur la première ligne modifiée par l'ami. */
@@ -1127,6 +1247,163 @@ function creerExtensionSurlignage(plugin) {
   }, { decorations: (v) => v.decorations });
 }
 
+/* ---------- Calendrier : emploi du temps (iCal), Moodle et agenda partagé ---------- */
+
+// Les liens iCal restent dans les réglages de CET appareil (dossier de configuration, jamais synchronisé) :
+// un lien Moodle contient une clé personnelle. Seul l'agenda de la cordée, une note ordinaire, est partagé.
+const NOTE_AGENDA = 'Agenda de la cordée.md';
+const COULEURS_CALENDRIER = { edt: 'var(--color-blue)', moodle: 'var(--color-orange)', autre: 'var(--color-purple)', cordee: 'var(--color-green)' };
+const JOUR = 24 * 3600_000;
+
+/** « 20261112T080000Z » (UTC), « 20261112T080000 » (heure locale ou TZID, supposé être celui de l'appareil), « 20261112 » (journée). */
+function lireDateIcs(valeur) {
+  const m = /^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})?(Z)?)?$/.exec(String(valeur).trim());
+  if (!m) return null;
+  const [, a, mo, j, h, mi, s, z] = m;
+  if (h === undefined) return { ms: new Date(+a, +mo - 1, +j).getTime(), journee: true };
+  if (z) return { ms: Date.UTC(+a, +mo - 1, +j, +h, +mi, +(s || 0)), journee: false };
+  return { ms: new Date(+a, +mo - 1, +j, +h, +mi, +(s || 0)).getTime(), journee: false };
+}
+
+const texteIcs = (v) => String(v).replace(/\\n/gi, '\n').replace(/\\([,;\\])/g, '$1').trim();
+
+/** Événements d'un fichier iCal (VEVENT), répétitions non développées. Tolère les lignes repliées et les fins de ligne Windows. */
+function lireIcs(texte) {
+  const lignes = String(texte).replace(/\r\n?/g, '\n').replace(/\n[ \t]/g, '').split('\n');
+  const evts = [];
+  let e = null;
+  for (const ligne of lignes) {
+    if (ligne === 'BEGIN:VEVENT') { e = { exdates: [] }; continue; }
+    if (ligne === 'END:VEVENT') {
+      if (e && Number.isFinite(e.debut)) { if (!Number.isFinite(e.fin)) e.fin = e.journee ? e.debut + JOUR : e.debut; evts.push(e); }
+      e = null; continue;
+    }
+    if (!e) continue;
+    const i = ligne.indexOf(':');
+    if (i < 0) continue;
+    const nom = ligne.slice(0, i).split(';')[0].toUpperCase();
+    const valeur = ligne.slice(i + 1);
+    if (nom === 'UID') e.uid = valeur;
+    else if (nom === 'SUMMARY') e.titre = texteIcs(valeur).slice(0, 300);
+    else if (nom === 'LOCATION') e.lieu = texteIcs(valeur).slice(0, 300);
+    else if (nom === 'DESCRIPTION') e.description = texteIcs(valeur).slice(0, 1500);
+    else if (nom === 'DTSTART') { const d = lireDateIcs(valeur); if (d) { e.debut = d.ms; e.journee = d.journee; } }
+    else if (nom === 'DTEND') { const d = lireDateIcs(valeur); if (d) e.fin = d.ms; }
+    else if (nom === 'RRULE') e.rrule = valeur;
+    else if (nom === 'EXDATE') for (const v of valeur.split(',')) { const d = lireDateIcs(v); if (d) e.exdates.push(d.ms); }
+  }
+  return evts;
+}
+
+const JOURS_ICS = { MO: 1, TU: 2, WE: 3, TH: 4, FR: 5, SA: 6, SU: 0 };
+const rangLundi = (jour) => (jour + 6) % 7;
+
+/**
+ * Événements qui touchent [de, a[, répétitions quotidiennes et hebdomadaires développées
+ * (INTERVAL, COUNT, UNTIL, BYDAY, EXDATE). Les autres répétitions gardent leur première date.
+ */
+function developper(evts, de, a) {
+  const sortie = [];
+  for (const e of evts) {
+    const duree = Math.max(0, e.fin - e.debut);
+    const r = e.rrule ? Object.fromEntries(e.rrule.split(';').map((p) => p.split('='))) : null;
+    if (!r || (r.FREQ !== 'DAILY' && r.FREQ !== 'WEEKLY')) { if (e.fin > de && e.debut < a || (duree === 0 && e.debut >= de && e.debut < a)) sortie.push(e); continue; }
+    const intervalle = Math.max(1, Number(r.INTERVAL) || 1);
+    const compte = r.COUNT ? Number(r.COUNT) : Infinity;
+    const jusqua = r.UNTIL ? (lireDateIcs(r.UNTIL)?.ms ?? Infinity) : Infinity;
+    const jours = r.FREQ === 'WEEKLY' && r.BYDAY ? r.BYDAY.split(',').map((j) => JOURS_ICS[j.slice(-2)]).filter((j) => j !== undefined) : null;
+    const exclus = new Set(e.exdates || []);
+    const premier = new Date(e.debut);
+    let n = 0, fini = false;
+    for (let k = 0; k < 3000 && !fini; k++) {
+      const candidats = [];
+      if (r.FREQ === 'DAILY') { const d = new Date(premier); d.setDate(d.getDate() + k * intervalle); candidats.push(d); }
+      else {
+        const lundi = new Date(premier); lundi.setDate(lundi.getDate() - rangLundi(lundi.getDay()) + k * 7 * intervalle);
+        for (const j of [...(jours || [premier.getDay()])].sort((x, y) => rangLundi(x) - rangLundi(y))) { const d = new Date(lundi); d.setDate(d.getDate() + rangLundi(j)); candidats.push(d); }
+      }
+      for (const d of candidats) {
+        const ms = d.getTime();
+        if (ms < e.debut) continue;
+        if (ms > jusqua || n >= compte || ms >= a) { fini = true; break; }
+        n++;
+        if (!exclus.has(ms) && ms + duree > de) sortie.push({ ...e, debut: ms, fin: ms + duree, rrule: undefined });
+      }
+    }
+  }
+  return sortie.sort((x, y) => x.debut - y.debut);
+}
+
+/** Type d'un lien iCal, pour la couleur et le libellé : emploi du temps, Moodle (devoirs) ou autre. */
+function typeCalendrier(url) {
+  if (/\/calendar\/export_execute\.php/i.test(url)) return 'moodle';
+  if (/ade|anonymous_cal|hyperplanning|celcat|edt|emploi/i.test(url)) return 'edt';
+  return 'autre';
+}
+
+// Un lien iCal contient souvent une clé : on n'en montre que le domaine.
+function masquerUrl(url) { try { return new URL(String(url).replace(/^webcal:/i, 'https:')).host + '/…'; } catch { return 'lien invalide'; } }
+
+/**
+ * Agenda de la cordée : une note partagée, une ligne par créneau, lisible et modifiable à la main.
+ * - 2026-11-12 14:00-16:00 Révision ENER3 @ BU (ajouté par Paulo)
+ * - 2026-11-15 Rendu du rapport de TP   ← sans heure : toute la journée
+ */
+function lireAgendaPartage(texte) {
+  const evts = [];
+  for (const ligne of String(texte || '').split(/\r?\n/)) {
+    const m = /^\s*[-*]\s+(?:\[[ xX]\]\s+)?(\d{4})-(\d{2})-(\d{2})(?:\s+(\d{1,2})[:h](\d{2})(?:\s*[-–]\s*(\d{1,2})[:h](\d{2}))?)?\s+(.+?)\s*$/.exec(ligne);
+    if (!m) continue;
+    const [, a, mo, j, h1, m1, h2, m2, reste] = m;
+    let titre = reste, lieu = '', auteur = '';
+    const parAuteur = /\s*\(ajouté par ([^)]+)\)$/.exec(titre);
+    if (parAuteur) { auteur = parAuteur[1].trim(); titre = titre.slice(0, parAuteur.index); }
+    const at = titre.indexOf(' @ ');
+    if (at >= 0) { lieu = titre.slice(at + 3).trim(); titre = titre.slice(0, at).trim(); }
+    const journee = h1 === undefined;
+    const debut = journee ? new Date(+a, +mo - 1, +j).getTime() : new Date(+a, +mo - 1, +j, +h1, +m1).getTime();
+    const fin = journee ? debut + JOUR : h2 !== undefined ? new Date(+a, +mo - 1, +j, +h2, +m2).getTime() : debut + 3600_000;
+    evts.push({ titre, lieu, auteur, debut, fin: Math.max(fin, debut), journee, ligne: ligne.trim() });
+  }
+  return evts;
+}
+
+function ligneAgenda({ jour, debut, fin, titre, lieu, auteur }) {
+  const net = (t) => String(t || '').replace(/[\r\n]+/g, ' ').replace(/\s+@\s+/g, ' – ').trim();
+  const heures = debut ? ` ${debut}${fin ? '-' + fin : ''}` : '';
+  return `- ${jour}${heures} ${net(titre)}${lieu ? ' @ ' + net(lieu) : ''}${auteur ? ` (ajouté par ${net(auteur)})` : ''}`;
+}
+
+function debutSemaine(date) { const d = new Date(date); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - rangLundi(d.getDay())); return d.getTime(); }
+const deuxChiffres = (n) => String(n).padStart(2, '0');
+const heure = (ms) => { const d = new Date(ms); return `${deuxChiffres(d.getHours())}:${deuxChiffres(d.getMinutes())}`; };
+const jourIso = (ms) => { const d = new Date(ms); return `${d.getFullYear()}-${deuxChiffres(d.getMonth() + 1)}-${deuxChiffres(d.getDate())}`; };
+const estEcheance = (e) => e.type === 'moodle' || (!e.journee && e.fin === e.debut);
+
+/** Répartit les événements qui se chevauchent dans une journée en colonnes côte à côte. */
+function placerEnColonnes(evts) {
+  const tries = [...evts].sort((x, y) => x.debut - y.debut || y.fin - x.fin);
+  const groupes = [];
+  let groupe = [], finGroupe = -Infinity;
+  for (const e of tries) {
+    if (e.debut >= finGroupe && groupe.length) { groupes.push(groupe); groupe = []; }
+    groupe.push(e); finGroupe = Math.max(finGroupe, e.fin);
+  }
+  if (groupe.length) groupes.push(groupe);
+  const places = [];
+  for (const g of groupes) {
+    const colonnes = [];
+    for (const e of g) {
+      let c = colonnes.findIndex((fin) => fin <= e.debut);
+      if (c < 0) { c = colonnes.length; colonnes.push(0); }
+      colonnes[c] = Math.max(e.fin, e.debut + 15 * 60_000);
+      places.push({ e, colonne: c });
+    }
+    for (const p of places.slice(-g.length)) p.colonnes = colonnes.length;
+  }
+  return places;
+}
+
 function calculerDiff(avant, apres) {
   if (typeof avant !== 'string' || typeof apres !== 'string' || avant.length > 256 * 1024 || apres.length > 256 * 1024) return { limite: true, lignes: [] };
   const decouper = (texte) => texte === '' ? [] : texte.replace(/\r\n/g, '\n').split('\n');
@@ -1370,6 +1647,12 @@ if (O) {
       const pause = boutonCordee(etat, '', () => plugin.mettreEnPause(!plugin.etat.enPause), { label: 'Pause ou reprise', cls: 'cordee-bouton-discret' });
       boutonCordee(etat, 'Synchroniser', () => plugin.lancer({ forcer: true }), { cls: 'cordee-bouton-discret' });
       const attention = tableau.createEl('p', { cls: 'cordee-attention', attr: { role: 'status' } });
+      const jourTitre = tableau.createEl('div', { cls: 'cordee-section-titre' });
+      jourTitre.createEl('h3', { text: 'Aujourd’hui' });
+      boutonCordee(jourTitre, 'La semaine', () => plugin.ouvrirSemaine(), { cls: 'cordee-bouton-discret' });
+      this.aujourdhuiEl = tableau.createEl('div', { cls: 'cordee-aujourdhui-liste' });
+      this.desabonnerCalendrier = plugin.surCalendrier?.(() => this.afficherAujourdhui());
+      this.chargementJour = this.afficherAujourdhui();
       const voir = tableau.createEl('div', { cls: 'cordee-section-titre' });
       this.titreAVoir = voir.createEl('h3', { text: 'À voir' });
       this.boutonToutVu = boutonCordee(voir, 'Tout marquer comme vu', () => plugin.toutMarquerVu(), { cls: 'cordee-bouton-discret' });
@@ -1394,6 +1677,32 @@ if (O) {
       this.chargement = this.charger();
     }
     actif() { return !this.detruit && !this.plugin.arret && this.plugin.etat.coffreId === this.coffreId && this.plugin.etat.jeton === this.jeton; }
+    /** La journée en un coup d'œil : cours qui restent aujourd'hui et devoirs Moodle à rendre dans la semaine. */
+    async afficherAujourdhui() {
+      const zone = this.aujourdhuiEl, p = this.plugin;
+      if (!zone || this.detruit) return;
+      const maintenant = Date.now();
+      const minuit = new Date(); minuit.setHours(24, 0, 0, 0);
+      let evts = [];
+      try { evts = await p.evenementsEntre(maintenant, maintenant + 7 * JOUR); } catch { /* calendrier illisible : on affiche ce qu'on a */ }
+      if (this.detruit) return;
+      zone.empty();
+      const restants = evts.filter((e) => !estEcheance(e) && e.fin > maintenant && e.debut < minuit.getTime()).slice(0, 4);
+      const echeances = evts.filter((e) => estEcheance(e) && e.debut >= maintenant).slice(0, 3);
+      if (!restants.length && !echeances.length) {
+        zone.createEl('p', { text: p.etat.calendriers.length ? 'Plus rien de prévu aujourd’hui, et aucun devoir à rendre cette semaine.' : 'Ajoute ton emploi du temps et Moodle dans les réglages de Cordée pour voir ta journée ici.', cls: 'cordee-vide' });
+        return;
+      }
+      for (const e of [...restants, ...echeances]) {
+        const b = boutonCordee(zone, '', () => new EvenementModal(this.app, p, e).open(), { label: e.titre, cls: 'cordee-evenement-ligne' });
+        b.style?.setProperty?.('--cordee-couleur', e.couleur);
+        const quand = estEcheance(e) ? `À rendre ${new Date(e.debut).toLocaleDateString('fr-FR', { weekday: 'short' })} ${heure(e.debut)}` : e.journee ? 'Journée' : `${heure(e.debut)}–${heure(e.fin)}`;
+        b.createEl('span', { text: quand, cls: 'cordee-evenement-heure' });
+        const t = b.createEl('span', { cls: 'cordee-evenement-texte' });
+        t.createEl('strong', { text: e.titre });
+        if (e.lieu) t.createEl('span', { text: e.lieu, cls: 'cordee-details' });
+      }
+    }
     /** Notes modifiées par les amis depuis ta dernière visite : un clic ouvre la note sur la modification. */
     afficherAVoir() {
       const p = this.plugin, zone = this.aVoirEl;
@@ -1476,7 +1785,7 @@ if (O) {
         }
       } catch (erreur) { if (this.actif() && this.tour === tour) { this.zone.empty(); this.zone.createEl('p', { text: expliquerErreur(erreur), cls: 'cordee-vide' }); } }
     }
-    detruire() { this.detruit = true; ++this.tour; this.desabonner?.(); }
+    detruire() { this.detruit = true; ++this.tour; this.desabonner?.(); this.desabonnerCalendrier?.(); }
   }
 
   /** Toutes les versions d'une note : qui, quand, combien de lignes ; un clic compare et permet de restaurer. */
@@ -1539,6 +1848,177 @@ if (O) {
     async onClose() { this.desabonner?.(); this.tableau?.detruire(); }
   };
 
+  /* ---------- La semaine : emploi du temps, devoirs Moodle et agenda de la cordée ---------- */
+
+  const decalerJours = (ms, n) => { const d = new Date(ms); d.setDate(d.getDate() + n); return d.getTime(); };
+  const estAujourdhui = (ms) => jourIso(ms) === jourIso(Date.now());
+  const LIBELLES_SOURCE = { edt: 'Emploi du temps', moodle: 'Moodle', autre: 'Calendrier', cordee: 'Agenda de la cordée' };
+
+  /** Dessine la semaine dans c : une grille (écran large) et une liste par jour (écran étroit), l'une ou l'autre selon la largeur. */
+  dessinerSemaine = async function (c, plugin, debut, changer) {
+    const jours = Array.from({ length: 7 }, (_, i) => decalerJours(debut, i));
+    const finSemaine = decalerJours(debut, 7);
+    const evts = await plugin.evenementsEntre(debut, finSemaine);
+    c.empty(); c.addClass?.('cordee-semaine');
+
+    const tete = c.createEl('div', { cls: 'cordee-semaine-tete' });
+    const nav = tete.createEl('div', { cls: 'cordee-commandes' });
+    boutonCordee(nav, '‹', () => changer(decalerJours(debut, -7)), { label: 'Semaine précédente', cls: 'cordee-bouton-discret' });
+    boutonCordee(nav, 'Aujourd’hui', () => changer(debutSemaine(Date.now())), { cls: 'cordee-bouton-discret' });
+    boutonCordee(nav, '›', () => changer(decalerJours(debut, 7)), { label: 'Semaine suivante', cls: 'cordee-bouton-discret' });
+    const d0 = new Date(jours[0]), d6 = new Date(jours[6]);
+    tete.createEl('h2', { text: `Semaine du ${d0.toLocaleDateString('fr-FR', { day: 'numeric', month: d0.getMonth() === d6.getMonth() ? undefined : 'long' })} au ${d6.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}`, cls: 'cordee-titre' });
+    const actions = tete.createEl('div', { cls: 'cordee-commandes' });
+    boutonCordee(actions, 'Ajouter un créneau', () => new CreneauModal(plugin.app, plugin, jourIso(Math.max(debut, Date.now()))).open(), { cls: 'cordee-bouton-principal' });
+    boutonCordee(actions, 'Actualiser', () => plugin.actualiserCalendriers({ forcer: true }), { cls: 'cordee-bouton-discret' });
+
+    const legende = c.createEl('div', { cls: 'cordee-legende' });
+    const sources = [...plugin.etat.calendriers.map((s) => ({ nom: s.nom, type: s.type })), { nom: 'Agenda de la cordée', type: 'cordee' }];
+    for (const s of sources) { const l = legende.createEl('span', { text: s.nom, cls: 'cordee-legende-source' }); l.style?.setProperty?.('--cordee-couleur', COULEURS_CALENDRIER[s.type] || COULEURS_CALENDRIER.autre); }
+    for (const s of plugin.etat.calendriers) {
+      const cache = plugin.etat.cacheCalendriers[s.id];
+      if (cache?.erreur) c.createEl('p', { text: `${s.nom} : ${cache.erreur}.${cache.maj ? ` Dernière version gardée (${ilYa(cache.maj)}).` : ''}`, cls: 'cordee-attention' });
+    }
+    if (!plugin.etat.calendriers.length) {
+      const vide = c.createEl('div', { cls: 'cordee-semaine-vide' });
+      vide.createEl('p', { text: 'Ajoute le lien iCal de ton emploi du temps et celui de Moodle (tes devoirs à rendre) dans les réglages de Cordée. Ils restent sur cet appareil. Les créneaux de l’agenda de la cordée, eux, sont partagés avec le groupe.', cls: 'cordee-details' });
+      boutonCordee(vide, 'Ajouter mon emploi du temps', () => plugin.ouvrirReglages(), { cls: 'cordee-bouton-discret' });
+    }
+
+    const ouvrir = (e) => new EvenementModal(plugin.app, plugin, e).open();
+    const touche = (e, j) => e.debut < decalerJours(j, 1) && (e.fin > j || (e.fin === e.debut && e.debut >= j));
+    const enJournee = (e) => e.journee || estEcheance(e);
+
+    // Grille : heures de 7 h à 20 h, élargies si un cours commence plus tôt ou finit plus tard.
+    const horaires = evts.filter((e) => !enJournee(e));
+    const hDebut = Math.min(7, ...horaires.map((e) => new Date(e.debut).getHours()));
+    const hFin = Math.max(20, ...horaires.map((e) => { const d = new Date(e.fin); return d.getHours() + (d.getMinutes() ? 1 : 0); }).filter((h) => h > 0));
+    const grille = c.createEl('div', { cls: 'cordee-grille' });
+    grille.style?.setProperty?.('--cordee-heures', String(hFin - hDebut));
+    grille.createEl('div', { cls: 'cordee-grille-coin' });
+    for (const j of jours) grille.createEl('div', { text: new Date(j).toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' }), cls: 'cordee-grille-jour' + (estAujourdhui(j) ? ' cordee-aujourdhui' : '') });
+    grille.createEl('div', { text: 'Journée', cls: 'cordee-grille-coin cordee-grille-legende' });
+    for (const j of jours) {
+      const cellule = grille.createEl('div', { cls: 'cordee-grille-journee' });
+      for (const e of evts.filter((x) => enJournee(x) && touche(x, j))) {
+        const b = boutonCordee(cellule, estEcheance(e) ? `À rendre ${heure(e.debut)} · ${e.titre}` : e.titre, () => ouvrir(e), { cls: 'cordee-pastille' + (estEcheance(e) ? ' cordee-echeance' : '') });
+        b.style?.setProperty?.('--cordee-couleur', e.couleur);
+      }
+    }
+    const heures = grille.createEl('div', { cls: 'cordee-grille-heures' });
+    for (let h = hDebut; h < hFin; h++) heures.createEl('div', { text: `${h} h`, cls: 'cordee-grille-heure' });
+    for (const j of jours) {
+      const colonne = grille.createEl('div', { cls: 'cordee-grille-colonne' + (estAujourdhui(j) ? ' cordee-aujourdhui' : '') });
+      const origine = new Date(j); origine.setHours(hDebut, 0, 0, 0);
+      const fin = new Date(j); fin.setHours(hFin, 0, 0, 0);
+      const etendue = fin.getTime() - origine.getTime();
+      for (const { e, colonne: rang, colonnes } of placerEnColonnes(horaires.filter((x) => touche(x, j)))) {
+        const de = Math.max(e.debut, origine.getTime()), a = Math.min(Math.max(e.fin, e.debut + 15 * 60_000), fin.getTime());
+        const b = boutonCordee(colonne, '', () => ouvrir(e), { label: `${e.titre}, ${heure(e.debut)} à ${heure(e.fin)}${e.lieu ? ', ' + e.lieu : ''}`, cls: 'cordee-evenement' });
+        if (b.style) Object.assign(b.style, { top: `${(de - origine.getTime()) / etendue * 100}%`, height: `${Math.max(3, (a - de) / etendue * 100)}%`, left: `${rang / colonnes * 100}%`, width: `${100 / colonnes}%` });
+        b.style?.setProperty?.('--cordee-couleur', e.couleur);
+        b.createEl('strong', { text: e.titre });
+        b.createEl('span', { text: `${heure(e.debut)}–${heure(e.fin)}${e.lieu ? ' · ' + e.lieu : ''}` });
+      }
+      if (estAujourdhui(j) && Date.now() > origine.getTime() && Date.now() < fin.getTime()) {
+        const maintenant = colonne.createEl('div', { cls: 'cordee-maintenant', attr: { 'aria-hidden': 'true' } });
+        if (maintenant.style) maintenant.style.top = `${(Date.now() - origine.getTime()) / etendue * 100}%`;
+      }
+    }
+
+    // Liste par jour, pour les écrans étroits (téléphone, panneau latéral).
+    const liste = c.createEl('div', { cls: 'cordee-liste-semaine' });
+    for (const j of jours) {
+      const duJour = evts.filter((e) => touche(e, j));
+      const bloc = liste.createEl('section', { cls: 'cordee-liste-jour' + (estAujourdhui(j) ? ' cordee-aujourdhui' : '') });
+      bloc.createEl('h3', { text: new Date(j).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' }) });
+      if (!duJour.length) { bloc.createEl('p', { text: 'Rien de prévu.', cls: 'cordee-vide' }); continue; }
+      for (const e of duJour) {
+        const b = boutonCordee(bloc, '', () => ouvrir(e), { label: e.titre, cls: 'cordee-evenement-ligne' });
+        b.style?.setProperty?.('--cordee-couleur', e.couleur);
+        b.createEl('span', { text: e.journee ? 'Journée' : estEcheance(e) ? `À rendre ${heure(e.debut)}` : `${heure(e.debut)}–${heure(e.fin)}`, cls: 'cordee-evenement-heure' });
+        const texte = b.createEl('span', { cls: 'cordee-evenement-texte' });
+        texte.createEl('strong', { text: e.titre });
+        const details = [e.lieu, e.source].filter(Boolean).join(' · ');
+        if (details) texte.createEl('span', { text: details, cls: 'cordee-details' });
+      }
+    }
+    return evts;
+  };
+
+  if (O.ItemView) VueSemaine = class extends O.ItemView {
+    constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.debut = debutSemaine(Date.now()); }
+    getViewType() { return VUE_SEMAINE; }
+    getDisplayText() { return 'Semaine'; }
+    getIcon() { return 'calendar-days'; }
+    async onOpen() {
+      this.desabonner = this.plugin.surCalendrier(() => this.dessiner());
+      this.minuteur = window.setInterval(() => this.dessiner(), 5 * 60_000); // le trait « maintenant » avance
+      await this.dessiner();
+    }
+    async dessiner() { await dessinerSemaine(this.contentEl, this.plugin, this.debut, (d) => { this.debut = d; this.dessiner(); }); }
+    async onClose() { this.desabonner?.(); window.clearInterval(this.minuteur); }
+  };
+
+  EvenementModal = class extends O.Modal {
+    constructor(app, plugin, e) { super(app); this.plugin = plugin; this.e = e; }
+    onOpen() {
+      const c = this.contentEl, e = this.e, p = this.plugin;
+      c.empty(); this.modalEl?.classList.add('cordee-tableau-modal');
+      const sur = c.createEl('div', { text: (LIBELLES_SOURCE[e.type] || 'Calendrier').toUpperCase(), cls: 'cordee-surtitre' });
+      sur.style?.setProperty?.('color', e.couleur);
+      c.createEl('h2', { text: e.titre, cls: 'cordee-titre' });
+      const date = new Date(e.debut).toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+      c.createEl('p', { text: e.journee ? `${date} · toute la journée` : estEcheance(e) ? `À rendre le ${date} à ${heure(e.debut)}` : `${date} · ${heure(e.debut)}–${heure(e.fin)}`, cls: 'cordee-evenement-quand' });
+      if (e.lieu) c.createEl('p', { text: `Où : ${e.lieu}`, cls: 'cordee-details' });
+      if (e.auteur) c.createEl('p', { text: `Ajouté par ${e.auteur}`, cls: 'cordee-details' });
+      if (e.description) c.createEl('p', { text: e.description, cls: 'cordee-evenement-description' });
+      const actions = c.createEl('div', { cls: 'cordee-commandes cordee-restaurer' });
+      boutonCordee(actions, 'Créer une note partagée', async () => { try { await p.creerNoteEvenement(e); this.close(); } catch (err) { new O.Notice('Cordée : ' + (err?.message || 'note impossible à créer')); } }, { cls: 'cordee-bouton-principal' });
+      if (e.type === 'cordee') boutonCordee(actions, 'Ouvrir l’agenda de la cordée', async () => { await this.app.workspace.openLinkText(NOTE_AGENDA, '', false); this.close(); }, { cls: 'cordee-bouton-discret' });
+      else boutonCordee(actions, 'Proposer ce créneau à la cordée', () => { this.close(); new CreneauModal(this.app, p, jourIso(e.debut), { titre: e.titre, debut: e.journee ? '' : heure(e.debut), fin: e.journee || estEcheance(e) ? '' : heure(e.fin), lieu: e.lieu }).open(); }, { cls: 'cordee-bouton-discret' });
+    }
+    onClose() { this.contentEl.empty(); }
+  };
+
+  CreneauModal = class extends O.Modal {
+    constructor(app, plugin, jour, valeurs = {}) { super(app); this.plugin = plugin; this.valeurs = { jour: jour || jourIso(Date.now()), titre: '', debut: '', fin: '', lieu: '', ...valeurs }; }
+    onOpen() {
+      const c = this.contentEl, v = this.valeurs, p = this.plugin;
+      c.empty(); this.modalEl?.classList.add('cordee-tableau-modal');
+      c.createEl('div', { text: 'AGENDA DE LA CORDÉE', cls: 'cordee-surtitre' });
+      c.createEl('h2', { text: 'Ajouter un créneau', cls: 'cordee-titre' });
+      c.createEl('p', { text: 'Il apparaît dans la semaine de chaque membre (révision, projet, rendu…).', cls: 'cordee-details' });
+      const formulaire = c.createEl('div', { cls: 'cordee-formulaire' });
+      const champ = (libelle, cle, type, attr = {}) => {
+        const l = formulaire.createEl('label', { cls: 'cordee-champ' });
+        l.createEl('span', { text: libelle });
+        const input = l.createEl('input', { attr: { type, value: v[cle] || '', ...attr } });
+        input.value = v[cle] || '';
+        input.addEventListener?.('input', () => { v[cle] = input.value; });
+        this.champs = { ...(this.champs || {}), [cle]: input };
+        return input;
+      };
+      champ('Quoi', 'titre', 'text', { placeholder: 'Révision ENER3', maxlength: '120' });
+      champ('Jour', 'jour', 'date');
+      champ('Début (facultatif)', 'debut', 'time');
+      champ('Fin (facultatif)', 'fin', 'time');
+      champ('Où (facultatif)', 'lieu', 'text', { placeholder: 'BU, salle, en ligne…', maxlength: '80' });
+      const retour = c.createEl('p', { cls: 'cordee-details', attr: { role: 'status' } });
+      const actions = c.createEl('div', { cls: 'cordee-commandes cordee-restaurer' });
+      boutonCordee(actions, 'Ajouter à l’agenda', async () => {
+        for (const [cle, input] of Object.entries(this.champs || {})) if (typeof input.value === 'string') v[cle] = input.value;
+        if (!v.titre.trim()) { retour.setText('Indique ce qui est prévu.'); return; }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(v.jour)) { retour.setText('Choisis un jour.'); return; }
+        if (v.fin && !v.debut) { retour.setText('Indique aussi l’heure de début.'); return; }
+        if (v.debut && v.fin && v.fin <= v.debut) { retour.setText('La fin doit être après le début.'); return; }
+        try { await p.ajouterCreneau({ jour: v.jour, debut: v.debut, fin: v.fin, titre: v.titre, lieu: v.lieu }); new O.Notice('Cordée : créneau ajouté à l’agenda de la cordée.'); this.close(); }
+        catch (err) { retour.setText('Ajout impossible : ' + (err?.message || 'erreur inconnue')); }
+      }, { cls: 'cordee-bouton-principal' });
+    }
+    onClose() { this.contentEl.empty(); }
+  };
+
   ActiviteModal = class extends O.Modal {
     constructor(app, plugin) { super(app); this.plugin = plugin; }
     onOpen() { this.tableau?.detruire(); this.modalEl?.classList.add('cordee-tableau-modal'); this.tableau = new TableauActivite(this.app, this.plugin, this.contentEl); return this.tableau.chargement; }
@@ -1555,6 +2035,31 @@ if (O) {
       this.afficherDans(this.containerEl, () => this.display());
     }
     nettoyer() { if (this.desabonner) { this.desabonner(); this.desabonner = null; } }
+    /** Calendriers iCal de cet appareil : emploi du temps, Moodle… Les liens ne quittent jamais l'appareil. */
+    afficherCalendriers(c, rafraichir) {
+      const p = this.plugin;
+      c.createEl('h3', { text: 'Calendriers' });
+      c.createEl('p', { text: 'Colle le lien iCal de ton emploi du temps (ADE, Hyperplanning…) et celui de Moodle (Calendrier → Exporter le calendrier → Obtenir l’adresse du calendrier) : tes cours et tes devoirs à rendre s’affichent dans la vue Semaine. Ces liens restent sur cet appareil et ne sont jamais partagés avec la cordée.', cls: 'cordee-details' });
+      for (const s of p.etat.calendriers) {
+        const cache = p.etat.cacheCalendriers[s.id];
+        const etat = cache?.erreur ? `Erreur : ${cache.erreur}` : cache?.maj ? `${cache.evenements.length} événements · mis à jour ${ilYa(cache.maj)}` : 'Pas encore lu';
+        new O.Setting(c).setName(`${s.nom} · ${{ edt: 'emploi du temps', moodle: 'Moodle', autre: 'calendrier' }[s.type] || 'calendrier'}`).setDesc(`${masquerUrl(s.url)} · ${etat}`)
+          .addButton((b) => b.setButtonText('Retirer').onClick(async () => { await p.retirerCalendrier(s.id); rafraichir(); }));
+      }
+      const f = this.formCalendrier || (this.formCalendrier = { nom: '', url: '' });
+      new O.Setting(c).setName('Nom').setDesc('Par exemple : Emploi du temps, Moodle').addText((t) => t.setPlaceholder('Emploi du temps').setValue(f.nom).onChange((v) => { f.nom = v; }));
+      new O.Setting(c).setName('Lien iCal').setDesc('Commence par https:// ou webcal://. Masqué à l’écran : il contient souvent une clé personnelle.').addText((t) => { t.inputEl.type = 'password'; t.setPlaceholder('https://…').setValue(f.url).onChange((v) => { f.url = v; }); });
+      new O.Setting(c).addButton((b) => b.setButtonText('Ajouter le calendrier').setCta().onClick(async () => {
+        try {
+          const s = await p.ajouterCalendrier(f.nom, f.url);
+          const cache = p.etat.cacheCalendriers[s.id];
+          new O.Notice(cache?.erreur ? `Cordée : « ${s.nom} » ajouté, mais lecture impossible (${cache.erreur}).` : `Cordée : ${cache?.evenements?.length || 0} événements trouvés dans « ${s.nom} ».`);
+          this.formCalendrier = { nom: '', url: '' };
+          rafraichir();
+        } catch (e) { new O.Notice('Cordée : ' + e.message); }
+      }));
+      new O.Setting(c).setName('La semaine').setDesc('Cours, devoirs Moodle et agenda de la cordée au même endroit.').addButton((b) => b.setButtonText('Ouvrir la semaine').onClick(() => p.ouvrirSemaine()));
+    }
     hide() { this.nettoyer(); }
     afficherDans(c, rafraichir) {
       const p = this.plugin, e = p.etat, f = this.form;
@@ -1583,6 +2088,7 @@ if (O) {
         new O.Setting(c).setName('Membres et activité').setDesc('Retrouve les membres du groupe et les 40 derniers changements.').addButton((b) => b.setButtonText('Voir l’activité').onClick(() => new ActiviteModal(this.app, p).open()));
         new O.Setting(c).setName('Mon profil').setDesc('Modifie ton nom affiché et ta photo pour ce groupe.').addButton((b) => b.setButtonText('Mon profil').onClick(() => new ProfilModal(this.app, p).open()));
         new O.Setting(c).setName('Dossiers non partagés').setDesc('Séparés par des virgules, par exemple : Brouillons, Perso').addText((t) => t.setValue(e.dossiersIgnores).onChange(async (v) => { e.dossiersIgnores = v; await p.saveData(e); }));
+        this.afficherCalendriers(c, rafraichir);
         new O.Setting(c).setName('Quitter ce coffre').setDesc('Tes fichiers restent sur ton ordinateur ; ils ne se synchronisent plus.').addButton((b) => b.setButtonText('Quitter').setWarning().onClick(async () => { await p.quitter(); rafraichir(); }));
         return;
       }
@@ -1644,4 +2150,4 @@ if (O) {
 
 module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
-module.exports.interne = { get HistoriqueModal() { return HistoriqueModal; }, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
+module.exports.interne = { get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };

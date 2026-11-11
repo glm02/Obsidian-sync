@@ -696,3 +696,90 @@ test('historique d’une note : chaque version avec son auteur, la plus récente
   assert.ok(rendu.textes.some((t) => t.includes('version actuelle')));
   assert.ok(rendu.boutons.has('Comparer la révision 3'));
 });
+
+const ICS_TEST = ['BEGIN:VCALENDAR', 'BEGIN:VEVENT', 'DTSTART:20261112T070000Z', 'DTEND:20261112T090000Z', 'SUMMARY:TD ENER3', 'LOCATION:Salle 104', 'END:VEVENT',
+  'BEGIN:VEVENT', 'DTSTART:20261113T225900Z', 'DTEND:20261113T225900Z', 'SUMMARY:Rendu TP2', 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+const LIEN_MOODLE = 'https://moodle.exemple.fr/calendar/export_execute.php?userid=42&authtoken=CLESECRETE';
+
+test('calendrier ajouté : lu, typé, mis en cache ; une erreur est expliquée sans montrer le lien', async () => {
+  const { plugin } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  plugin.lireUrlCalendrier = async () => ICS_TEST;
+  const s = await plugin.ajouterCalendrier('', LIEN_MOODLE);
+  assert.equal(s.type, 'moodle');
+  assert.equal(s.nom, 'Moodle');
+  assert.equal(plugin.etat.cacheCalendriers[s.id].evenements.length, 2);
+  const evts = await plugin.evenementsEntre(new Date(2026, 10, 9).getTime(), new Date(2026, 10, 16).getTime());
+  assert.deepEqual([...evts.map((e) => e.titre)], ['TD ENER3', 'Rendu TP2']);
+  assert.equal(evts[0].type, 'moodle');
+  plugin.lireUrlCalendrier = async () => { throw new Error('le serveur du calendrier répond 403'); };
+  await plugin.actualiserCalendriers({ forcer: true });
+  const cache = plugin.etat.cacheCalendriers[s.id];
+  assert.equal(cache.erreur, 'le serveur du calendrier répond 403');
+  assert.equal(cache.evenements.length, 2, 'la dernière version lue est gardée');
+  await assert.rejects(plugin.ajouterCalendrier('X', 'ftp://exemple.fr/a.ics'), /https:/);
+});
+
+test('réglages : la section Calendriers montre le domaine du lien, jamais la clé', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST, calendriers: [{ id: 'm', nom: 'Moodle', url: LIEN_MOODLE, type: 'moodle' }], cacheCalendriers: { m: { maj: Date.now(), evenements: [{}, {}], erreur: null } } });
+  await plugin.onload();
+  plugin.onglet.display();
+  assert.ok(rendu.textes.includes('Calendriers'));
+  assert.ok(rendu.boutons.has('Ajouter le calendrier'));
+  assert.ok(rendu.boutons.has('Retirer'));
+  assert.equal(rendu.textes.some((t) => String(t).includes('CLESECRETE')), false);
+});
+
+test('agenda de la cordée : un créneau s’ajoute à la note partagée, et apparaît dans la semaine', async () => {
+  const { plugin, obsidian } = charger({ ...ETAT_TEST, prenom: 'raf' });
+  await plugin.onload();
+  let contenu = null; let note = null;
+  plugin.app.vault.getAbstractFileByPath = (chemin) => (chemin === 'Agenda de la cordée.md' ? note : null);
+  plugin.app.vault.create = async (chemin, texte) => { contenu = texte; note = Object.assign(new obsidian.TFile(), { path: chemin }); };
+  plugin.app.vault.process = async (f, modifier) => { contenu = modifier(contenu); };
+  plugin.app.vault.cachedRead = async () => contenu;
+  await plugin.ajouterCreneau({ jour: '2026-11-12', debut: '14:00', fin: '16:00', titre: 'Révision ENER3', lieu: 'BU' });
+  await plugin.ajouterCreneau({ jour: '2026-11-15', titre: 'Rendu rapport' });
+  assert.ok(contenu.includes('- 2026-11-12 14:00-16:00 Révision ENER3 @ BU (ajouté par raf)'));
+  assert.ok(contenu.trimEnd().endsWith('- 2026-11-15 Rendu rapport (ajouté par raf)'));
+  const evts = await plugin.evenementsEntre(new Date(2026, 10, 9).getTime(), new Date(2026, 10, 16).getTime());
+  assert.deepEqual([...evts.map((e) => [e.titre, e.type])].map((x) => [...x]), [['Révision ENER3', 'cordee'], ['Rendu rapport', 'cordee']]);
+});
+
+test('formulaire de créneau : refuse un titre vide ou une fin avant le début, puis ajoute', async () => {
+  const { plugin, rendu, interne } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  const ajouts = [];
+  plugin.ajouterCreneau = async (c) => { ajouts.push(c); };
+  const modal = new interne.CreneauModal(plugin.app, plugin, '2026-11-12');
+  modal.open();
+  await rendu.boutons.get('Ajouter à l’agenda')();
+  assert.ok(rendu.textes.includes('Indique ce qui est prévu.'));
+  modal.champs.titre.value = 'Révision'; modal.champs.debut.value = '16:00'; modal.champs.fin.value = '14:00';
+  await rendu.boutons.get('Ajouter à l’agenda')();
+  assert.ok(rendu.textes.includes('La fin doit être après le début.'));
+  modal.champs.fin.value = '18:00';
+  await rendu.boutons.get('Ajouter à l’agenda')();
+  assert.deepEqual(ajouts.map((a) => [a.jour, a.debut, a.fin, a.titre]), [['2026-11-12', '16:00', '18:00', 'Révision']]);
+});
+
+test('la semaine : cours avec horaires, devoir « à rendre », liste par jour ; sans calendrier, une aide', async () => {
+  const { plugin, rendu, interne, obsidian } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  const lundi = new Date(2026, 10, 9).getTime();
+  // Sans aucun calendrier : l'aide pour en ajouter un.
+  const c = new obsidian.Modal(plugin.app).contentEl;
+  await interne.dessinerSemaine(c, plugin, lundi, () => {});
+  assert.ok(rendu.textes.some((t) => String(t).startsWith('Semaine du 9 au 15 novembre')));
+  assert.ok(rendu.boutons.has('Ajouter mon emploi du temps'));
+  // Avec un emploi du temps et un devoir Moodle.
+  plugin.etat.calendriers = [{ id: 'e', nom: 'Emploi du temps', url: 'https://ade.exemple.fr/x', type: 'edt' }, { id: 'm', nom: 'Moodle', url: LIEN_MOODLE, type: 'moodle' }];
+  plugin.etat.cacheCalendriers = { e: { maj: Date.now(), evenements: [{ titre: 'TD ENER3', lieu: 'Salle 104', debut: new Date(2026, 10, 12, 8).getTime(), fin: new Date(2026, 10, 12, 10).getTime() }] }, m: { maj: Date.now(), evenements: [{ titre: 'Rendu TP2', debut: new Date(2026, 10, 13, 23, 59).getTime(), fin: new Date(2026, 10, 13, 23, 59).getTime() }] } };
+  const evts = await interne.dessinerSemaine(c, plugin, lundi, () => {});
+  assert.equal(evts.length, 2);
+  assert.ok(rendu.textes.includes('TD ENER3'));
+  assert.ok(rendu.textes.includes('08:00–10:00 · Salle 104'));
+  assert.ok(rendu.textes.includes('À rendre 23:59 · Rendu TP2'), 'le devoir est dans la ligne « Journée » de la grille');
+  assert.ok(rendu.textes.includes('À rendre 23:59'), 'et dans la liste par jour');
+  assert.ok(rendu.textes.includes('Rien de prévu.'));
+});
