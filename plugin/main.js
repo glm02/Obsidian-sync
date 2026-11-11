@@ -884,7 +884,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   async actualiserCalendriers({ forcer = false, seulement = null } = {}) {
     if (this.calendriersEnCours) return this.calendriersEnCours;
     this.calendriersEnCours = (async () => {
-      for (const s of this.etat.calendriers) {
+      for (const s of this.toutesSources(await this.texteAgenda())) {
         if (seulement && s.id !== seulement) continue;
         const cache = this.etat.cacheCalendriers[s.id];
         if (!forcer && cache?.maj && Date.now() - cache.maj < 25 * 60_000) continue;
@@ -905,17 +905,55 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   /** Tous les événements de [de, a[ : calendriers iCal de cet appareil + agenda de la cordée (note partagée). */
   async evenementsEntre(de, a) {
     const tous = [];
-    for (const s of this.etat.calendriers) {
+    const texte = await this.texteAgenda();
+    for (const s of this.toutesSources(texte)) {
       const cache = this.etat.cacheCalendriers[s.id];
-      for (const e of developper(cache?.evenements || [], de, a)) tous.push({ ...e, source: s.nom, type: s.type, couleur: COULEURS_CALENDRIER[s.type] || COULEURS_CALENDRIER.autre });
+      for (const e of developper(cache?.evenements || [], de, a)) tous.push({ ...e, source: s.nom, type: s.type, partage: !!s.partage, couleur: COULEURS_CALENDRIER[s.type] || COULEURS_CALENDRIER.autre });
     }
-    const note = this.app.vault.getAbstractFileByPath?.(NOTE_AGENDA);
-    if (note && (!O.TFile || note instanceof O.TFile)) {
-      try {
-        for (const e of lireAgendaPartage(await this.app.vault.cachedRead(note))) if (e.fin > de && e.debut < a) tous.push({ ...e, source: 'Agenda de la cordée', type: 'cordee', couleur: COULEURS_CALENDRIER.cordee });
-      } catch { /* note en cours d'écriture : elle reviendra au prochain affichage */ }
-    }
+    for (const e of lireAgendaPartage(texte)) if (e.fin > de && e.debut < a) tous.push({ ...e, source: 'Agenda de la cordée', type: 'cordee', couleur: COULEURS_CALENDRIER.cordee });
     return tous.sort((x, y) => x.debut - y.debut);
+  }
+
+  /** Texte de la note « Agenda de la cordée » (vide si elle n'existe pas encore ou s'écrit en ce moment). */
+  async texteAgenda() {
+    const note = this.app.vault.getAbstractFileByPath?.(NOTE_AGENDA);
+    if (!note || (O.TFile && !(note instanceof O.TFile))) return '';
+    try { return await this.app.vault.cachedRead(note); } catch { return ''; }
+  }
+
+  /**
+   * Calendriers de cet appareil + calendriers partagés de la cordée. Un même lien présent des deux côtés
+   * n'est compté qu'une fois (version partagée). Un lien Moodle partagé par erreur est ignoré : il est personnel.
+   */
+  toutesSources(texteAgenda) {
+    const partages = lireCalendriersPartages(texteAgenda).filter((s) => s.type !== 'moodle');
+    const urls = new Set(partages.map((s) => s.url));
+    return [...this.etat.calendriers.filter((s) => !urls.has(s.url)), ...partages];
+  }
+
+  /** Ajoute un emploi du temps pour toute la cordée : le lien va dans la note partagée, chacun le lit. */
+  async ajouterCalendrierPourTous(nom, url) {
+    const lien = String(url || '').trim();
+    if (!/^(https?|webcal):\/\/\S+$/i.test(lien)) throw new Error('Colle un lien iCal complet, qui commence par https:// ou webcal://');
+    if (typeCalendrier(lien) === 'moodle') throw new Error('Un lien Moodle est personnel : il ouvre ton compte. Ajoute-le « pour moi » seulement ; chacun ajoute le sien.');
+    const source = { nom: String(nom || '').trim() || ({ edt: 'Emploi du temps' }[typeCalendrier(lien)] || 'Calendrier'), url: lien };
+    const vault = this.app.vault;
+    const note = vault.getAbstractFileByPath(NOTE_AGENDA);
+    if (note) await vault.process(note, (t) => modifierCalendriersPartages(t, { ajouter: source }));
+    else await vault.create(NOTE_AGENDA, modifierCalendriersPartages(`# Agenda de la cordée\n\nUne ligne par créneau, visible par toute la cordée dans la vue Semaine de Cordée.\nFormat : - AAAA-MM-JJ HH:MM-HH:MM Titre @ Lieu\n`, { ajouter: source }));
+    // Si ce lien était déjà ajouté « pour moi », la version partagée le remplace.
+    this.etat.calendriers = this.etat.calendriers.filter((s) => s.url !== lien);
+    const partage = lireCalendriersPartages(await this.texteAgenda()).find((s) => s.url === lien) || { id: 'p' + empreinteCourte(lien) };
+    await this.actualiserCalendriers({ forcer: true, seulement: partage.id });
+    return { ...source, id: partage.id, type: typeCalendrier(lien), partage: true };
+  }
+
+  async retirerCalendrierPartage(url) {
+    const note = this.app.vault.getAbstractFileByPath(NOTE_AGENDA);
+    if (note) await this.app.vault.process(note, (t) => modifierCalendriersPartages(t, { retirerUrl: url }));
+    delete this.etat.cacheCalendriers['p' + empreinteCourte(url)];
+    try { await this.saveData(this.etat); } catch { /* cache seulement */ }
+    this.rafraichirCalendrier();
   }
 
   ouvrirReglages() {
@@ -1437,7 +1475,7 @@ function masquerUrl(url) { try { return new URL(String(url).replace(/^webcal:/i,
 
 /**
  * Agenda de la cordée : une note partagée, une ligne par créneau, lisible et modifiable à la main.
- * - 2026-11-12 14:00-16:00 Révision ENER3 @ BU (ajouté par Paulo)
+ * - 2026-11-12 14:00-16:00 Révision ENER3 @ BU (ajouté par Bruno)
  * - 2026-11-15 Rendu du rapport de TP   ← sans heure : toute la journée
  */
 function lireAgendaPartage(texte) {
@@ -1457,6 +1495,49 @@ function lireAgendaPartage(texte) {
     evts.push({ titre, lieu, auteur, debut, fin: Math.max(fin, debut), journee, ligne: ligne.trim() });
   }
   return evts;
+}
+
+/**
+ * Calendriers partagés : des liens Markdown dans la note « Agenda de la cordée », sous
+ * « ## Calendriers partagés ». Chaque membre les lit : un emploi du temps commun s'ajoute une fois pour tous.
+ * - [Emploi du temps GEII S3](https://ade.exemple.fr/…)
+ */
+const TITRE_PARTAGES = '## Calendriers partagés';
+function lireCalendriersPartages(texte) {
+  const sources = [];
+  const vus = new Set();
+  for (const ligne of String(texte || '').split(/\r?\n/)) {
+    const m = /^\s*[-*]\s+\[([^\]]{1,60})\]\(((?:https?|webcal):\/\/[^)\s]+)\)\s*$/i.exec(ligne);
+    if (!m || vus.has(m[2])) continue;
+    vus.add(m[2]);
+    sources.push({ id: 'p' + empreinteCourte(m[2]), nom: m[1].trim(), url: m[2], type: typeCalendrier(m[2]), partage: true });
+  }
+  return sources;
+}
+
+/** Ajoute (ou retire) un lien dans la section des calendriers partagés, en laissant le reste de la note intact. */
+function modifierCalendriersPartages(texte, { ajouter, retirerUrl }) {
+  let lignes = String(texte || '').replace(/\r\n/g, '\n').split('\n');
+  if (retirerUrl) lignes = lignes.filter((l) => !(l.includes(`](${retirerUrl})`) && /^\s*[-*]\s+\[/.test(l)));
+  if (ajouter) {
+    const ligne = `- [${String(ajouter.nom).replace(/[[\]\r\n]/g, ' ').trim().slice(0, 60) || 'Calendrier'}](${ajouter.url})`;
+    const i = lignes.findIndex((l) => l.trim() === TITRE_PARTAGES);
+    if (i >= 0) lignes.splice(i + 1, 0, ligne);
+    else {
+      // Juste après le titre de la note (et son paragraphe d'explication), avant les créneaux.
+      const premierCreneau = lignes.findIndex((l) => /^\s*[-*]\s+(?:\[[ xX]\]\s+)?\d{4}-\d{2}-\d{2}/.test(l));
+      const ou = premierCreneau >= 0 ? premierCreneau : lignes.length;
+      lignes.splice(ou, 0, TITRE_PARTAGES, 'Liens iCal visibles par toute la cordée (emploi du temps commun…). Jamais de lien Moodle : il est personnel.', ligne, '', '## Créneaux');
+      if (premierCreneau < 0) lignes.push('');
+    }
+  }
+  return lignes.join('\n');
+}
+
+function empreinteCourte(texte) {
+  let h = 5381;
+  for (const car of String(texte)) h = ((h * 33) ^ car.codePointAt(0)) >>> 0;
+  return h.toString(36);
 }
 
 function ligneAgenda({ jour, debut, fin, titre, lieu, auteur }) {
@@ -1967,15 +2048,16 @@ if (O) {
     boutonCordee(actions, 'Actualiser', () => plugin.actualiserCalendriers({ forcer: true }), { cls: 'cordee-bouton-discret' });
 
     const legende = c.createEl('div', { cls: 'cordee-legende' });
-    const sources = [...plugin.etat.calendriers.map((s) => ({ nom: s.nom, type: s.type })), { nom: 'Agenda de la cordée', type: 'cordee' }];
+    const toutes = plugin.toutesSources(await plugin.texteAgenda());
+    const sources = [...toutes.map((s) => ({ nom: s.partage ? `${s.nom} (cordée)` : s.nom, type: s.type })), { nom: 'Agenda de la cordée', type: 'cordee' }];
     for (const s of sources) { const l = legende.createEl('span', { text: s.nom, cls: 'cordee-legende-source' }); l.style?.setProperty?.('--cordee-couleur', COULEURS_CALENDRIER[s.type] || COULEURS_CALENDRIER.autre); }
-    for (const s of plugin.etat.calendriers) {
+    for (const s of toutes) {
       const cache = plugin.etat.cacheCalendriers[s.id];
       if (cache?.erreur) c.createEl('p', { text: `${s.nom} : ${cache.erreur}.${cache.maj ? ` Dernière version gardée (${ilYa(cache.maj)}).` : ''}`, cls: 'cordee-attention' });
     }
-    if (!plugin.etat.calendriers.length) {
+    if (!toutes.length) {
       const vide = c.createEl('div', { cls: 'cordee-semaine-vide' });
-      vide.createEl('p', { text: 'Ajoute le lien iCal de ton emploi du temps et celui de Moodle (tes devoirs à rendre) dans les réglages de Cordée. Ils restent sur cet appareil. Les créneaux de l’agenda de la cordée, eux, sont partagés avec le groupe.', cls: 'cordee-details' });
+      vide.createEl('p', { text: 'Ajoute le lien iCal de ton emploi du temps dans les réglages de Cordée, « pour toute la cordée » s’il est commun au groupe. Ton lien Moodle (devoirs à rendre) s’ajoute « pour moi » : il est personnel. Les créneaux de l’agenda de la cordée sont partagés avec le groupe.', cls: 'cordee-details' });
       boutonCordee(vide, 'Ajouter mon emploi du temps', () => plugin.ouvrirReglages(), { cls: 'cordee-bouton-discret' });
     }
 
@@ -2133,7 +2215,17 @@ if (O) {
     afficherCalendriers(c, rafraichir) {
       const p = this.plugin;
       c.createEl('h3', { text: 'Calendriers' });
-      c.createEl('p', { text: 'Colle le lien iCal de ton emploi du temps (ADE, Hyperplanning…) et celui de Moodle (Calendrier → Exporter le calendrier → Obtenir l’adresse du calendrier) : tes cours et tes devoirs à rendre s’affichent dans la vue Semaine. Ces liens restent sur cet appareil et ne sont jamais partagés avec la cordée.', cls: 'cordee-details' });
+      c.createEl('p', { text: 'Colle le lien iCal de ton emploi du temps (ADE, Hyperplanning…) et celui de Moodle (Calendrier → Exporter le calendrier → Obtenir l’adresse du calendrier) : tes cours et tes devoirs à rendre s’affichent dans la vue Semaine. « Pour moi » : le lien reste sur cet appareil. « Pour toute la cordée » : il est écrit dans la note partagée « Agenda de la cordée » et chacun voit le même emploi du temps. Un lien Moodle, personnel, ne se partage pas.', cls: 'cordee-details' });
+      // Calendriers partagés : lus dans la note commune (lecture asynchrone, affichés dès qu'ils sont là).
+      const zonePartages = c.createEl('div');
+      p.texteAgenda().then((texte) => {
+        for (const s of lireCalendriersPartages(texte)) {
+          const cache = p.etat.cacheCalendriers[s.id];
+          const etat = s.type === 'moodle' ? 'Ignoré : un lien Moodle est personnel, retire-le de la note' : cache?.erreur ? `Erreur : ${cache.erreur}` : cache?.maj ? `${cache.evenements.length} événements · mis à jour ${ilYa(cache.maj)}` : 'Pas encore lu';
+          new O.Setting(zonePartages).setName(`${s.nom} · partagé avec la cordée`).setDesc(`${masquerUrl(s.url)} · ${etat}`)
+            .addButton((b) => b.setButtonText('Retirer pour tous').onClick(async () => { await p.retirerCalendrierPartage(s.url); rafraichir(); }));
+        }
+      }).catch(() => { /* la note se relira au prochain affichage */ });
       for (const s of p.etat.calendriers) {
         const cache = p.etat.cacheCalendriers[s.id];
         const etat = cache?.erreur ? `Erreur : ${cache.erreur}` : cache?.maj ? `${cache.evenements.length} événements · mis à jour ${ilYa(cache.maj)}` : 'Pas encore lu';
@@ -2143,15 +2235,19 @@ if (O) {
       const f = this.formCalendrier || (this.formCalendrier = { nom: '', url: '' });
       new O.Setting(c).setName('Nom').setDesc('Par exemple : Emploi du temps, Moodle').addText((t) => t.setPlaceholder('Emploi du temps').setValue(f.nom).onChange((v) => { f.nom = v; }));
       new O.Setting(c).setName('Lien iCal').setDesc('Commence par https:// ou webcal://. Masqué à l’écran : il contient souvent une clé personnelle.').addText((t) => { t.inputEl.type = 'password'; t.setPlaceholder('https://…').setValue(f.url).onChange((v) => { f.url = v; }); });
-      new O.Setting(c).addButton((b) => b.setButtonText('Ajouter le calendrier').setCta().onClick(async () => {
+      const ajouter = async (pourTous) => {
         try {
-          const s = await p.ajouterCalendrier(f.nom, f.url);
+          const s = pourTous ? await p.ajouterCalendrierPourTous(f.nom, f.url) : await p.ajouterCalendrier(f.nom, f.url);
           const cache = p.etat.cacheCalendriers[s.id];
-          new O.Notice(cache?.erreur ? `Cordée : « ${s.nom} » ajouté, mais lecture impossible (${cache.erreur}).` : `Cordée : ${cache?.evenements?.length || 0} événements trouvés dans « ${s.nom} ».`);
+          const ou = pourTous ? ' pour toute la cordée' : '';
+          new O.Notice(cache?.erreur ? `Cordée : « ${s.nom} » ajouté${ou}, mais lecture impossible (${cache.erreur}).` : `Cordée : « ${s.nom} » ajouté${ou} · ${cache?.evenements?.length || 0} événements.`);
           this.formCalendrier = { nom: '', url: '' };
           rafraichir();
         } catch (e) { new O.Notice('Cordée : ' + e.message); }
-      }));
+      };
+      new O.Setting(c).setDesc('Un emploi du temps commun au groupe : ajoute-le une fois pour toute la cordée.')
+        .addButton((b) => b.setButtonText('Ajouter pour moi').onClick(() => ajouter(false)))
+        .addButton((b) => b.setButtonText('Ajouter pour toute la cordée').setCta().onClick(() => ajouter(true)));
       new O.Setting(c).setName('La semaine').setDesc('Cours, devoirs Moodle et agenda de la cordée au même endroit.').addButton((b) => b.setButtonText('Ouvrir la semaine').onClick(() => p.ouvrirSemaine()));
     }
     hide() { this.nettoyer(); }
@@ -2244,4 +2340,4 @@ if (O) {
 
 module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
-module.exports.interne = { get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, arriveesPresence, derniereActivite, resumePresence, afficherBarrePresence, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
+module.exports.interne = { lireCalendriersPartages, modifierCalendriersPartages, get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, arriveesPresence, derniereActivite, resumePresence, afficherBarrePresence, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };

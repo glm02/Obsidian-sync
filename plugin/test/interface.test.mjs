@@ -588,7 +588,7 @@ test('lignes modifiées : apparues ou changées, sans les lignes vides, avec les
   assert.equal(r.ajouts, 3);
   assert.equal(r.suppressions, 1);
   assert.equal(interne.echapperCss('S3/"x"\\y.md'), 'S3/\\"x\\"\\\\y.md');
-  assert.equal(interne.couleurAuteur('Paulo'), interne.couleurAuteur('Paulo'), 'une personne garde sa couleur');
+  assert.equal(interne.couleurAuteur('Bruno'), interne.couleurAuteur('Bruno'), 'une personne garde sa couleur');
   assert.equal(interne.ilYa(Date.now() - 5 * 60_000), 'il y a 5 min');
 });
 
@@ -596,7 +596,7 @@ test('ce qu’un ami modifie devient « à voir » : statut, panneau, puis « Vu
   const { plugin, rendu } = charger({ ...ETAT_TEST }, { setTimeout: (f) => { f(); return 0; } });
   await plugin.onload();
   plugin.moteur.api = async () => ({ json: async () => ({ ...INFO_TEST, changements: [] }) });
-  plugin.moteur.signaler('modifie-par', 'S3/ENER3/Cours.md', { auteur: 'Paulo', le: Date.now(), lignes: ['ligne changée'], ajouts: 1, suppressions: 0, nouveau: false, texte: true });
+  plugin.moteur.signaler('modifie-par', 'S3/ENER3/Cours.md', { auteur: 'Bruno', le: Date.now(), lignes: ['ligne changée'], ajouts: 1, suppressions: 0, nouveau: false, texte: true });
   assert.equal(plugin.nombreAVoir(), 1);
   assert.deepEqual([...plugin.etat.aVoir['S3/ENER3/Cours.md'].lignes], ['ligne changée']);
   let barre = ''; plugin.barre.setText = (t) => { barre = t; }; plugin.afficher();
@@ -605,9 +605,9 @@ test('ce qu’un ami modifie devient « à voir » : statut, panneau, puis « Vu
   assert.ok(rendu.textes.includes('À voir (1)'));
   assert.ok(rendu.textes.includes('Cours.md'), 'le nom du fichier, pas le chemin entier');
   assert.ok(rendu.textes.includes('S3/ENER3'), 'le dossier à part');
-  assert.ok(rendu.textes.some((t) => t.startsWith('Paulo · +1 ligne ·')));
+  assert.ok(rendu.textes.some((t) => t.startsWith('Bruno · +1 ligne ·')));
   // Une seconde modification de la même note s'ajoute à la première.
-  plugin.moteur.signaler('modifie-par', 'S3/ENER3/Cours.md', { auteur: 'Paulo', le: Date.now(), lignes: ['autre ligne'], ajouts: 1, suppressions: 1, nouveau: false, texte: true });
+  plugin.moteur.signaler('modifie-par', 'S3/ENER3/Cours.md', { auteur: 'Bruno', le: Date.now(), lignes: ['autre ligne'], ajouts: 1, suppressions: 1, nouveau: false, texte: true });
   assert.deepEqual([...plugin.etat.aVoir['S3/ENER3/Cours.md'].lignes].sort(), ['autre ligne', 'ligne changée']);
   await rendu.boutons.get('Marquer S3/ENER3/Cours.md comme vu')();
   assert.equal(plugin.nombreAVoir(), 0);
@@ -616,7 +616,7 @@ test('ce qu’un ami modifie devient « à voir » : statut, panneau, puis « Vu
 
 test('les modifications de plus d’une semaine ne sont plus « à voir » au démarrage', async () => {
   const vieux = Date.now() - 8 * 24 * 3600_000;
-  const { plugin } = charger({ ...ETAT_TEST, aVoir: { 'ancien.md': { auteurs: ['Paulo'], le: vieux, lignes: [] }, 'recent.md': { auteurs: ['Paulo'], le: Date.now(), lignes: [] } } });
+  const { plugin } = charger({ ...ETAT_TEST, aVoir: { 'ancien.md': { auteurs: ['Bruno'], le: vieux, lignes: [] }, 'recent.md': { auteurs: ['Bruno'], le: Date.now(), lignes: [] } } });
   await plugin.onload();
   assert.deepEqual([...Object.keys(plugin.etat.aVoir)], ['recent.md']);
 });
@@ -626,11 +626,11 @@ test('présence : on voit qui est en ligne et sur quelle note, et une note priv�
   plugin.app.workspace.getActiveFile = () => ({ path: 'Cours.md' });
   await plugin.onload();
   let barre = ''; plugin.barre.setText = (t) => { barre = t; };
-  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Autre.md' }]);
-  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours.md' }]);
-  assert.match(rendu.notice, /Paulo est aussi sur cette note/);
-  assert.match(barre, /Paulo en ligne/);
-  assert.equal(plugin.presenceSur('Cours.md')[0].nom, 'Paulo');
+  plugin.majPresence([{ id: 'b', nom: 'Bruno', chemin: 'Autre.md' }]);
+  plugin.majPresence([{ id: 'b', nom: 'Bruno', chemin: 'Cours.md' }]);
+  assert.match(rendu.notice, /Bruno est aussi sur cette note/);
+  assert.match(barre, /Bruno en ligne/);
+  assert.equal(plugin.presenceSur('Cours.md')[0].nom, 'Bruno');
   const envois = [];
   plugin.moteur.api = async (methode, chemin, corps) => { envois.push(corps); return { json: async () => ({ presence: [] }) }; };
   await plugin.annoncerPresence('Perso/journal.md');
@@ -658,12 +658,12 @@ test('les dernières visites se lisent en minutes, heures et jours, sans invente
   assert.equal(interne.derniereActivite(new Date(2026, 4, 11, 23).getTime(), maintenant), 'vu hier');
   assert.equal(interne.derniereActivite(maintenant - 3 * 86400_000, maintenant), 'vu il y a 3 j');
   assert.equal(interne.derniereActivite(maintenant - 10 * 86400_000, maintenant), `vu ${new Date(maintenant - 10 * 86400_000).toLocaleDateString('fr-FR')}`);
-  assert.equal(interne.resumePresence([{ id: 'moi', nom: 'Moi' }, { id: 'b', nom: 'Paulo', vu_le: maintenant - 2 * 3600_000 }], [], 'moi', maintenant), 'Personne d’autre en ligne · Paulo vu il y a 2 h');
+  assert.equal(interne.resumePresence([{ id: 'moi', nom: 'Moi' }, { id: 'b', nom: 'Bruno', vu_le: maintenant - 2 * 3600_000 }], [], 'moi', maintenant), 'Personne d’autre en ligne · Bruno vu il y a 2 h');
 });
 
 test('les arrivées se détectent par identifiant, une seule fois et à partir du premier résultat réussi', () => {
   const { interne } = charger({});
-  const ami = { id: 'b', nom: 'Paulo' }, autre = { id: 'c', nom: 'Paulo' };
+  const ami = { id: 'b', nom: 'Bruno' }, autre = { id: 'c', nom: 'Bruno' };
   const maintenant = 1_800_000_000_000;
   assert.equal(interne.arriveesPresence(null, [ami], {}, maintenant).length, 0);
   assert.equal(interne.arriveesPresence([], [ami, ami], {}, maintenant).length, 1);
@@ -680,12 +680,12 @@ test('connexion d’un ami : pas d’alerte au démarrage, anti-répétition con
   const { plugin, rendu } = charger({ ...ETAT_TEST }, navigateur);
   await plugin.onload();
   plugin.app.workspace.getActiveFile = () => ({ path: 'Cours.md' });
-  const ami = { id: 'b', nom: 'Paulo', chemin: 'Cours.md' };
+  const ami = { id: 'b', nom: 'Bruno', chemin: 'Cours.md' };
   plugin.majPresence([ami]);
   assert.deepEqual(rendu.notices, [], 'aucune notification pour un ami déjà là au démarrage');
   plugin.majPresence([]);
   plugin.majPresence([ami]);
-  assert.deepEqual(rendu.notices, ['Paulo vient de se connecter']);
+  assert.deepEqual(rendu.notices, ['Bruno vient de se connecter']);
   plugin.majPresence([ami]);
   plugin.majPresence([]);
   horloge += 29 * 60_000;
@@ -699,7 +699,7 @@ test('connexion d’un ami : pas d’alerte au démarrage, anti-répétition con
   redemarrage.plugin.majPresence([]);
   horloge += 60_000;
   redemarrage.plugin.majPresence([ami]);
-  assert.deepEqual(redemarrage.rendu.notices, ['Paulo vient de se connecter']);
+  assert.deepEqual(redemarrage.rendu.notices, ['Bruno vient de se connecter']);
 });
 
 test('la commande désactive les alertes, garde le choix et ne signale pas un ami déjà présent à la réactivation', async () => {
@@ -712,15 +712,15 @@ test('la commande désactive les alertes, garde le choix et ne signale pas un am
   assert.equal(rendu.sauvegarde.prevenirConnexions, false);
   const notices = rendu.notices.length;
   plugin.majPresence([]);
-  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours.md' }]);
+  plugin.majPresence([{ id: 'b', nom: 'Bruno', chemin: 'Cours.md' }]);
   assert.equal(rendu.notices.length, notices);
   await commande.callback();
   assert.equal(rendu.sauvegarde.prevenirConnexions, true);
-  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours.md' }]);
-  assert.equal(rendu.notices.filter((n) => n === 'Paulo vient de se connecter').length, 0);
+  plugin.majPresence([{ id: 'b', nom: 'Bruno', chemin: 'Cours.md' }]);
+  assert.equal(rendu.notices.filter((n) => n === 'Bruno vient de se connecter').length, 0);
   plugin.majPresence([]);
-  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: null }]);
-  assert.equal(rendu.notices.at(-1), 'Paulo vient de se connecter');
+  plugin.majPresence([{ id: 'b', nom: 'Bruno', chemin: null }]);
+  assert.equal(rendu.notices.at(-1), 'Bruno vient de se connecter');
 });
 
 test('le panneau affiche les amis présents, leur note et leurs dernières visites, puis suit un départ', async () => {
@@ -728,21 +728,21 @@ test('le panneau affiche les amis présents, leur note et leurs dernières visit
   const { plugin, rendu } = charger({ ...ETAT_TEST }, { Date: class extends Date { static now() { return maintenant; } }, setTimeout: (f) => { f(); return 0; } });
   await plugin.onload();
   plugin.moteur.api = async () => ({ json: async () => ({ rev: 1, moiId: 'moi', changements: [], membres: [
-    { id: 'moi', nom: 'Moi' }, { id: 'b', nom: 'Paulo', vu_le: maintenant - 12 * 60_000 },
+    { id: 'moi', nom: 'Moi' }, { id: 'b', nom: 'Bruno', vu_le: maintenant - 12 * 60_000 },
     { id: 'c', nom: 'Camille', vu_le: new Date(2026, 4, 11, 23).getTime() }, { id: 'd', nom: 'Alex', vu_le: null },
   ] }) });
-  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours/TD.md' }]);
+  plugin.majPresence([{ id: 'b', nom: 'Bruno', chemin: 'Cours/TD.md' }]);
   await plugin.ruban.callback();
   await rendu.modal.tableau.chargement;
   const statuts = () => rendu.elements.filter((e) => e.attrs.cls === 'cordee-presence-membre');
-  assert.ok(rendu.textes.includes('Paulo est en ligne'));
+  assert.ok(rendu.textes.includes('Bruno est en ligne'));
   assert.ok(statuts().some((e) => e.textContent === 'en ligne · sur TD.md' && e.attrs.attr['data-en-ligne'] === 'true'));
   assert.ok(statuts().some((e) => e.textContent === 'vu hier'));
   assert.ok(statuts().some((e) => e.textContent === 'pas encore connecté'));
   plugin.majPresence([]);
   await new Promise((ok) => setImmediate(ok));
   assert.ok(statuts().some((e) => e.textContent === 'vu il y a 12 min'));
-  assert.ok(rendu.textes.includes('Personne d’autre en ligne · Paulo vu il y a 12 min'));
+  assert.ok(rendu.textes.includes('Personne d’autre en ligne · Bruno vu il y a 12 min'));
 });
 
 test('la barre d’état ajoute une pastille aux noms en ligne et la retire au départ', async () => {
@@ -750,8 +750,8 @@ test('la barre d’état ajoute une pastille aux noms en ligne et la retire au d
   await plugin.onload();
   await plugin.ruban.callback();
   const barre = rendu.modal.contentEl;
-  interne.afficherBarrePresence(barre, 'Cordée : prêt', ['Paulo']);
-  assert.equal(barre.enfants.find((e) => e.attrs.cls === 'cordee-presence-barre').textContent, 'Paulo en ligne');
+  interne.afficherBarrePresence(barre, 'Cordée : prêt', ['Bruno']);
+  assert.equal(barre.enfants.find((e) => e.attrs.cls === 'cordee-presence-barre').textContent, 'Bruno en ligne');
   // Le vrai setText d'Obsidian remplace les enfants de la barre.
   barre.setText = function (texte) { this.enfants = []; this.textContent = texte; };
   interne.afficherBarrePresence(barre, 'Cordée : prêt', []);
@@ -763,12 +763,12 @@ test('un ami modifie la note ouverte : une alerte le dit, ses lignes sont « à 
   const { plugin, rendu } = charger({ ...ETAT_TEST }, { setTimeout: (f) => { f(); return 0; } });
   plugin.app.workspace.getActiveFile = () => ({ path: 'Cours.md' });
   await plugin.onload();
-  plugin.moteur.signaler('modifie-par', 'Cours.md', { auteur: 'Paulo', le: Date.now(), lignes: ['x'], ajouts: 2, suppressions: 1, nouveau: false, texte: true });
-  assert.match(rendu.notice, /Paulo vient de modifier cette note \(\+2 lignes −1 ligne\)/);
+  plugin.moteur.signaler('modifie-par', 'Cours.md', { auteur: 'Bruno', le: Date.now(), lignes: ['x'], ajouts: 2, suppressions: 1, nouveau: false, texte: true });
+  assert.match(rendu.notice, /Bruno vient de modifier cette note \(\+2 lignes −1 ligne\)/);
 });
 
 test('restaurer une version : téléchargée puis écrite, et la note n’est plus « à voir »', async () => {
-  const { plugin } = charger({ ...ETAT_TEST, aVoir: { 'a.md': { auteurs: ['Paulo'], le: Date.now(), lignes: [] } } }, { setTimeout: (f) => { f(); return 0; } });
+  const { plugin } = charger({ ...ETAT_TEST, aVoir: { 'a.md': { auteurs: ['Bruno'], le: Date.now(), lignes: [] } } }, { setTimeout: (f) => { f(); return 0; } });
   await plugin.onload();
   const ecrits = [];
   plugin.moteur.telecharger = async (hash) => new TextEncoder().encode('version ' + hash).buffer;
@@ -784,7 +784,7 @@ test('comparaison : « Restaurer » demande une confirmation avant de remplacer 
   await plugin.onload();
   const restaures = [];
   plugin.restaurer = async (chemin, hash) => { restaures.push([chemin, hash]); };
-  plugin.moteur.api = async () => ({ json: async () => ({ raison: null, avant: 'a', apres: 'b', changement: { rev: 5, chemin: 'a.md', hash: 'h2', avantHash: 'h1', auteur: 'Paulo', auteurId: 'p', le: Date.now(), supprime: false, type: 'fichier' } }) });
+  plugin.moteur.api = async () => ({ json: async () => ({ raison: null, avant: 'a', apres: 'b', changement: { rev: 5, chemin: 'a.md', hash: 'h2', avantHash: 'h1', auteur: 'Bruno', auteurId: 'p', le: Date.now(), supprime: false, type: 'fichier' } }) });
   await new interne.RevisionModal(plugin.app, plugin, 5, null).open();
   assert.ok(rendu.boutons.has('Restaurer cette version'));
   assert.ok(rendu.boutons.has('Revenir à la version d’avant'));
@@ -800,13 +800,13 @@ test('historique d’une note : chaque version avec son auteur, la plus récente
   await plugin.onload();
   let demande = '';
   plugin.moteur.api = async (m, chemin) => { demande = chemin; return { json: async () => ({ membres: [], changements: [
-    { rev: 9, chemin: 'S3/a.md', auteur: 'Paulo', auteurId: 'p', le: Date.now() - 60_000, hash: 'h2', avantHash: 'h1', supprime: false },
+    { rev: 9, chemin: 'S3/a.md', auteur: 'Bruno', auteurId: 'p', le: Date.now() - 60_000, hash: 'h2', avantHash: 'h1', supprime: false },
     { rev: 3, chemin: 'S3/a.md', auteur: 'raf', auteurId: 'r', le: Date.now() - 3_600_000, hash: 'h1', avantHash: null, supprime: false },
   ] }) }; };
   await new interne.HistoriqueModal(plugin.app, plugin, 'S3/a.md').open();
   assert.match(demande, /historique\?chemin=S3%2Fa\.md/);
   assert.ok(rendu.textes.includes('a.md'));
-  assert.ok(rendu.textes.some((t) => t.startsWith('Paulo · ')));
+  assert.ok(rendu.textes.some((t) => t.startsWith('Bruno · ')));
   assert.ok(rendu.textes.some((t) => t.includes('version actuelle')));
   assert.ok(rendu.boutons.has('Comparer la révision 3'));
 });
@@ -839,7 +839,8 @@ test('réglages : la section Calendriers montre le domaine du lien, jamais la cl
   await plugin.onload();
   plugin.onglet.display();
   assert.ok(rendu.textes.includes('Calendriers'));
-  assert.ok(rendu.boutons.has('Ajouter le calendrier'));
+  assert.ok(rendu.boutons.has('Ajouter pour moi'));
+  assert.ok(rendu.boutons.has('Ajouter pour toute la cordée'));
   assert.ok(rendu.boutons.has('Retirer'));
   assert.equal(rendu.textes.some((t) => String(t).includes('CLESECRETE')), false);
 });
@@ -896,4 +897,29 @@ test('la semaine : cours avec horaires, devoir « à rendre », liste par jour ;
   assert.ok(rendu.textes.includes('À rendre 23:59 · Rendu TP2'), 'le devoir est dans la ligne « Journée » de la grille');
   assert.ok(rendu.textes.includes('À rendre 23:59'), 'et dans la liste par jour');
   assert.ok(rendu.textes.includes('Rien de prévu.'));
+});
+
+test('emploi du temps pour toute la cordée : écrit dans la note commune, lu par chacun ; Moodle refusé', async () => {
+  const { plugin, obsidian } = charger({ ...ETAT_TEST, prenom: 'raf' });
+  await plugin.onload();
+  let contenu = null; let note = null;
+  plugin.app.vault.getAbstractFileByPath = (chemin) => (chemin === 'Agenda de la cordée.md' ? note : null);
+  plugin.app.vault.create = async (chemin, texte) => { contenu = texte; note = Object.assign(new obsidian.TFile(), { path: chemin }); };
+  plugin.app.vault.process = async (f, modifier) => { contenu = modifier(contenu); };
+  plugin.app.vault.cachedRead = async () => contenu;
+  plugin.lireUrlCalendrier = async () => ICS_TEST;
+  await assert.rejects(plugin.ajouterCalendrierPourTous('Moodle', LIEN_MOODLE), /personnel/);
+  assert.equal(contenu, null, 'rien n’est écrit pour un lien Moodle');
+  // Ce lien était déjà ajouté « pour moi » : la version partagée le remplace, sans doublon.
+  plugin.etat.calendriers = [{ id: 'local', nom: 'EDT', url: 'https://ade.exemple.fr/cal.ics', type: 'edt' }];
+  const s = await plugin.ajouterCalendrierPourTous('Emploi du temps S3', 'https://ade.exemple.fr/cal.ics');
+  assert.equal(s.partage, true);
+  assert.ok(contenu.includes('- [Emploi du temps S3](https://ade.exemple.fr/cal.ics)'));
+  assert.equal(plugin.etat.calendriers.length, 0);
+  const evts = await plugin.evenementsEntre(new Date(2026, 10, 9).getTime(), new Date(2026, 10, 16).getTime());
+  assert.deepEqual([...evts.map((e) => e.titre)], ['TD ENER3', 'Rendu TP2']);
+  assert.equal(evts[0].partage, true);
+  await plugin.retirerCalendrierPartage('https://ade.exemple.fr/cal.ics');
+  assert.equal(contenu.includes('ade.exemple.fr'), false);
+  assert.equal((await plugin.evenementsEntre(new Date(2026, 10, 9).getTime(), new Date(2026, 10, 16).getTime())).length, 0);
 });

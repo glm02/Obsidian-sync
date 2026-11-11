@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes } = require('../main.js').interne;
+const { lireCalendriersPartages, modifierCalendriersPartages, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes } = require('../main.js').interne;
 
 const ics = (...evenements) => ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Test//FR', ...evenements.flatMap((e) => ['BEGIN:VEVENT', ...e, 'END:VEVENT']), 'END:VCALENDAR'].join('\r\n');
 const local = (a, mo, j, h = 0, mi = 0) => new Date(a, mo - 1, j, h, mi).getTime();
@@ -72,14 +72,14 @@ test('répétition quotidienne avec intervalle et date de fin', () => {
 test('agenda de la cordée : lignes lisibles, heures facultatives, lieu et auteur reconnus', () => {
   const texte = [
     '# Agenda de la cordée', '',
-    '- 2026-11-12 14:00-16:00 Révision ENER3 @ BU (ajouté par Paulo)',
+    '- 2026-11-12 14:00-16:00 Révision ENER3 @ BU (ajouté par Bruno)',
     '- [ ] 2026-11-13 9h30 Point projet SAE',
     '- 2026-11-15 Rendu du rapport de TP',
     '- pas une date du tout',
   ].join('\n');
   const evts = lireAgendaPartage(texte);
   assert.equal(evts.length, 3);
-  assert.deepEqual([evts[0].titre, evts[0].lieu, evts[0].auteur], ['Révision ENER3', 'BU', 'Paulo']);
+  assert.deepEqual([evts[0].titre, evts[0].lieu, evts[0].auteur], ['Révision ENER3', 'BU', 'Bruno']);
   assert.equal(evts[0].debut, local(2026, 11, 12, 14));
   assert.equal(evts[0].fin, local(2026, 11, 12, 16));
   assert.equal(evts[1].fin - evts[1].debut, 3600_000, 'sans heure de fin : une heure');
@@ -107,4 +107,23 @@ test('des cours qui se chevauchent sont mis côte à côte', () => {
   assert.notEqual(par(h(8)).colonne, par(h(9)).colonne);
   assert.equal(par(h(10)).colonne, par(h(8)).colonne, 'la place libérée à 10 h est reprise');
   assert.equal(par(h(14)).colonnes, 1, 'un cours seul prend toute la largeur');
+});
+
+test('calendriers partagés : des liens dans la note commune, ajoutés sans toucher aux créneaux', () => {
+  const avant = ['# Agenda de la cordée', '', 'Explication.', '', '- 2026-11-12 14:00-16:00 Révision @ BU (ajouté par Bruno)'].join('\n');
+  const apres = modifierCalendriersPartages(avant, { ajouter: { nom: 'Emploi du temps S3', url: 'https://ade.exemple.fr/cal.ics' } });
+  const [source] = lireCalendriersPartages(apres);
+  assert.deepEqual([source.nom, source.url, source.type, source.partage], ['Emploi du temps S3', 'https://ade.exemple.fr/cal.ics', 'edt', true]);
+  assert.ok(apres.indexOf('## Calendriers partagés') < apres.indexOf('- 2026-11-12'), 'la section passe avant les créneaux');
+  assert.ok(apres.includes('- 2026-11-12 14:00-16:00 Révision @ BU (ajouté par Bruno)'), 'le créneau est intact');
+  // Un second ajout va dans la même section ; le retrait n'enlève que ce lien.
+  const deux = modifierCalendriersPartages(apres, { ajouter: { nom: 'Club robotique', url: 'webcal://agenda.exemple.fr/robot.ics' } });
+  assert.equal(deux.split('## Calendriers partagés').length, 2);
+  assert.equal(lireCalendriersPartages(deux).length, 2);
+  const retire = modifierCalendriersPartages(deux, { retirerUrl: 'https://ade.exemple.fr/cal.ics' });
+  assert.deepEqual(lireCalendriersPartages(retire).map((x) => x.nom), ['Club robotique']);
+  assert.ok(retire.includes('- 2026-11-12 14:00-16:00'));
+  // Même lien deux fois : compté une fois ; identifiant stable.
+  assert.equal(lireCalendriersPartages(deux + '\n- [Doublon](webcal://agenda.exemple.fr/robot.ics)').length, 2);
+  assert.equal(lireCalendriersPartages(deux)[0].id, lireCalendriersPartages(deux)[0].id);
 });
