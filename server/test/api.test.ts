@@ -418,8 +418,9 @@ test('la migration des anciens membres préserve les jetons et les photos après
   ancien.prepare('INSERT INTO membres VALUES (?, ?, ?, ?, ?, ?)').run('membre-test', 'coffre-test', 'Alice', sha('jeton-fictif'), 1, 0);
   ancien.close();
   let instance: ReturnType<typeof creerServeur> | undefined;
+  let vuLe: number | null = null;
   try {
-    for (let tour = 0; tour < 2; tour++) {
+    for (let tour = 0; tour < 3; tour++) {
       instance = creerServeur({ dossierDonnees: dossier, codeCreation: CODE });
       await new Promise<void>((ok) => instance!.serveur.listen(0, '127.0.0.1', () => ok()));
       const url = `http://127.0.0.1:${(instance.serveur.address() as AddressInfo).port}/api/coffres/coffre-test`;
@@ -428,7 +429,15 @@ test('la migration des anciens membres préserve les jetons et les photos après
       assert.equal(info.rev, 7);
       assert.equal(info.moiId, 'membre-test');
       assert.equal(info.membres[0].avatar, tour === 0 ? null : PNG);
-      if (tour === 0) assert.equal((await fetch(url + '/profil', { method: 'PUT', headers, body: JSON.stringify({ avatar: PNG }) })).status, 200);
+      assert.equal(info.membres[0].vu_le, tour === 1 ? vuLe : null, 'la date visible et le masquage survivent aux redémarrages');
+      if (tour === 0) {
+        assert.equal((await fetch(url + '/profil', { method: 'PUT', headers, body: JSON.stringify({ avatar: PNG }) })).status, 200);
+        await fetch(url + '/presence', { method: 'POST', headers, body: JSON.stringify({ chemin: null }) });
+        vuLe = (await (await fetch(url, { headers })).json()).membres[0].vu_le;
+        assert.ok(vuLe! > 0);
+        await fetch(url + '/presence', { method: 'POST', headers, body: JSON.stringify({ parti: true }) });
+      }
+      if (tour === 1) await fetch(url + '/presence', { method: 'POST', headers, body: JSON.stringify({ parti: true, masquee: true }) });
       const fermeture = new Promise<void>((ok) => instance!.serveur.once('close', () => ok()));
       instance.fermer(); instance = undefined;
       await fermeture;
@@ -476,6 +485,48 @@ test("présence : chacun voit quelle note les autres ont ouverte, et elle s'effa
     assert.deepEqual((await s.appel('GET', route + '?revision=1', undefined, c.jeton)).json.presence, []);
     assert.equal((await s.appel('POST', route + '/presence', { chemin: 'x.md' })).statut, 401);
   } finally { await s.arreter(); }
+});
+
+test('dernière activité : dates espacées de 30 s, expiration et confidentialité après départ', async (t) => {
+  const s = await demarrer();
+  let horloge = 1_800_000_000_000;
+  t.mock.method(Date, 'now', () => horloge);
+  try {
+    const a = (await s.appel('POST', '/api/coffres', { nom: 'Présence', prenom: 'Alice', codeCreation: CODE })).json;
+    const route = `/api/coffres/${a.coffreId}`;
+    const code = (await s.appel('POST', route + '/invitations', {}, a.jeton)).json.code;
+    const b = (await s.appel('POST', '/api/rejoindre', { code, prenom: 'Bruno' })).json;
+    const voir = async () => (await s.appel('GET', route, undefined, a.jeton)).json.membres.find((m: { nom: string }) => m.nom === 'Bruno').vu_le;
+    const annoncer = (corps: unknown) => s.appel('POST', route + '/presence', corps, b.jeton);
+    assert.equal(await voir(), null);
+    await annoncer({ chemin: '../secret.md' });
+    assert.equal(await voir(), null, 'une annonce invalide ne constitue pas une activité');
+    await annoncer({ chemin: null });
+    const premiere = horloge;
+    assert.equal(await voir(), premiere);
+    horloge += 29_999;
+    await annoncer({ chemin: 'Cours.md' });
+    assert.equal(await voir(), premiere);
+    horloge++;
+    await annoncer({ chemin: null });
+    const derniere = horloge;
+    assert.equal(await voir(), derniere, 'la limite de 30 s est incluse');
+    horloge += 90_001;
+    assert.deepEqual((await s.appel('GET', route + '?revision=1', undefined, a.jeton)).json.presence, []);
+    assert.equal(await voir(), derniere, 'la date reste disponible après expiration');
+    await s.appel('GET', route + '?revision=1', undefined, b.jeton);
+    assert.equal(await voir(), derniere, 'les sondages seuls ne révèlent pas une activité cachée');
+    await annoncer({ parti: true });
+    assert.equal(await voir(), derniere, 'fermer Obsidian conserve la dernière visite');
+    await annoncer({ parti: true, masquee: true });
+    assert.equal(await voir(), null, 'masquer sa présence masque aussi la date précédente');
+    assert.equal((await s.appel('GET', route + '/activite', undefined, a.jeton)).json.membres.find((m: { nom: string }) => m.nom === 'Bruno').vu_le, null);
+    horloge += 60_000;
+    await annoncer({ parti: true });
+    assert.equal(await voir(), null, 'une fermeture ne réactive pas la visibilité');
+    await annoncer({ chemin: null });
+    assert.equal(await voir(), horloge, 'une nouvelle annonce visible réactive la date');
+  } finally { t.mock.restoreAll(); await s.arreter(); }
 });
 
 test("historique d'une note : ses versions de la plus récente à la plus ancienne, et seulement elle", async () => {

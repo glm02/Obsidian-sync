@@ -106,6 +106,8 @@ export function creerServeur(opts: Options) {
   const colonnesMembres = db.prepare('PRAGMA table_info(membres)').all() as Array<{ name: string }>;
   if (!colonnesMembres.some((c) => c.name === 'avatar')) db.exec('ALTER TABLE membres ADD COLUMN avatar TEXT');
   if (!colonnesMembres.some((c) => c.name === 'version')) db.exec('ALTER TABLE membres ADD COLUMN version TEXT');
+  if (!colonnesMembres.some((c) => c.name === 'vu_le')) db.exec('ALTER TABLE membres ADD COLUMN vu_le INTEGER');
+  if (!colonnesMembres.some((c) => c.name === 'presence_masquee')) db.exec('ALTER TABLE membres ADD COLUMN presence_masquee INTEGER NOT NULL DEFAULT 0');
   const colonnesChangements = db.prepare('PRAGMA table_info(changements)').all() as Array<{ name: string }>;
   if (!colonnesChangements.some((c) => c.name === 'type')) db.exec("ALTER TABLE changements ADD COLUMN type TEXT NOT NULL DEFAULT 'fichier'");
   db.exec(`CREATE INDEX IF NOT EXISTS changements_chemin_type_rev ON changements (coffre_id, chemin, type, rev);
@@ -120,7 +122,7 @@ export function creerServeur(opts: Options) {
   const exposerChangement = (c: ChangementStocke) => ({ ...c, supprime: c.supprime === 1 });
 
   function membresDuCoffre(coffreId: string) {
-    return db.prepare('SELECT id, nom, avatar, version, cree_le AS arrive_le FROM membres WHERE coffre_id = ? AND revoque = 0 ORDER BY cree_le').all(coffreId);
+    return db.prepare('SELECT id, nom, avatar, version, CASE WHEN presence_masquee = 1 THEN NULL ELSE vu_le END AS vu_le, cree_le AS arrive_le FROM membres WHERE coffre_id = ? AND revoque = 0 ORDER BY cree_le').all(coffreId);
   }
 
   function fichierBloquant(coffreId: string, chemin: string, inclureLui = true) {
@@ -147,7 +149,7 @@ export function creerServeur(opts: Options) {
 
   const codeCreationHash = sha256(opts.codeCreation);
   const abonnes = new Map<string, Set<http.ServerResponse>>();
-  // Présence : quelle note chaque membre a ouverte, en mémoire seulement (rien n'est écrit sur disque).
+  // Le chemin de la note reste en mémoire seulement ; seule la dernière activité visible est conservée.
   // L'extension la renouvelle toutes les 45 s ; sans nouvelle depuis 90 s, le membre n'est plus « là ».
   const presences = new Map<string, Map<string, { nom: string; chemin: string | null; jusqua: number }>>();
   function presenceDu(coffreId: string, sauf?: string) {
@@ -362,10 +364,20 @@ export function creerServeur(opts: Options) {
         const b = await lireJson(req);
         const chemin = b.chemin === null || b.chemin === undefined ? null : b.chemin;
         if (chemin !== null && !cheminValide(chemin)) throw new ErreurHttp(400, 'Chemin invalide.');
-        if (b.parti === true) presences.get(coffreId)?.delete(moi.id);
+        if (b.parti === true) {
+          presences.get(coffreId)?.delete(moi.id);
+          // Masquer sa présence cache aussi l'ancienne date, sans actualiser sa dernière activité.
+          // Une simple fermeture d'Obsidian ne change pas cette préférence persistante.
+          if (b.masquee === true) db.prepare('UPDATE membres SET presence_masquee = 1 WHERE id = ? AND presence_masquee = 0').run(moi.id);
+        }
         else {
+          const t = maintenant();
+          // Les ouvertures de notes peuvent être rapprochées : au plus une date écrite toutes les 30 s.
+          db.prepare(`UPDATE membres SET vu_le = CASE WHEN vu_le IS NULL OR vu_le <= ? THEN ? ELSE vu_le END,
+            presence_masquee = 0 WHERE id = ? AND (presence_masquee = 1 OR vu_le IS NULL OR vu_le <= ?)`)
+            .run(t - 30_000, t, moi.id, t - 30_000);
           if (!presences.has(coffreId)) presences.set(coffreId, new Map());
-          presences.get(coffreId)!.set(moi.id, { nom: moi.nom, chemin, jusqua: maintenant() + 90_000 });
+          presences.get(coffreId)!.set(moi.id, { nom: moi.nom, chemin, jusqua: t + 90_000 });
         }
         return envoyer(res, 200, { presence: presenceDu(coffreId, moi.id) });
       }

@@ -243,3 +243,10 @@ button.cordee-evenement-ligne:not(.clickable-icon):hover { background-color: var
   .cordee-etiquette { display: none; } /* sur petit écran l'étiquette gênerait la lecture : le surlignage suffit */
 }
 @media (prefers-reduced-motion: reduce) { .cordee-bouton, .cordee-fichier, .cordee-collegue { transition: none; } }
+
+/* ---------- Présence des amis : pastilles adaptées au thème ---------- */
+.cordee-presence-resume { color: var(--text-muted); font-size: var(--font-ui-small); margin: var(--size-4-1) 0 0; }
+.cordee-presence-membre { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.cordee-presence-membre[data-en-ligne="true"] { color: var(--color-green); }
+.cordee-presence-membre[data-en-ligne="true"]::before,
+.cordee-presence-barre::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--color-green); margin-inline-end: var(--size-4-1); vertical-align: middle; }

@@ -433,7 +433,7 @@ function comparerVersions(a, b) {
   return 0;
 }
 
-const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiers: {}, enAttente: {}, aVoir: {}, calendriers: [], cacheCalendriers: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null };
+const PAR_DEFAUT = { serveur: '', coffreId: '', nomCoffre: '', jeton: '', prenom: '', derniereRev: 0, bases: {}, cache: {}, dossiers: {}, enAttente: {}, aVoir: {}, calendriers: [], cacheCalendriers: {}, dossiersIgnores: '', enPause: false, derniereSynchro: null, prevenirConnexions: true };
 
 function expliquerErreur(erreur) {
   if ([401, 403].includes(erreur?.statut)) return 'Accès refusé. Ton accès au coffre a peut-être été retiré : demande une nouvelle invitation.';
@@ -627,6 +627,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.barre.addClass?.('mod-clickable');
     this.barre.onClickEvent?.(() => this.ouvrirPanneau());
     this.presence = [];
+    this.initialiserConnexions();
     if (O.ItemView && this.registerView) { this.registerView(VUE_CORDEE, (leaf) => new VuePanneau(leaf, this)); this.registerView(VUE_SEMAINE, (leaf) => new VueSemaine(leaf, this)); }
     this.moteur = this.creerMoteur();
     this.afficher('');
@@ -644,7 +645,8 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.addCommand({ id: 'historique', name: 'Historique de cette note (versions, restauration)', callback: () => { const f = this.app.workspace.getActiveFile?.(); if (f) new HistoriqueModal(this.app, this, f.path).open(); else new O.Notice('Ouvre d’abord une note.'); } });
     this.addCommand({ id: 'semaine', name: 'Ouvrir la semaine (emploi du temps, Moodle, agenda de la cordée)', callback: () => this.ouvrirSemaine() });
     this.addCommand({ id: 'creneau', name: 'Ajouter un créneau à l’agenda de la cordée', callback: () => new CreneauModal(this.app, this).open() });
-    this.addCommand({ id: 'presence', name: 'Montrer ou masquer aux autres la note que j’ouvre', callback: () => this.basculerPresence() });
+    this.addCommand({ id: 'presence', name: 'Montrer ou masquer ma présence (note et dernière activité)', callback: () => this.basculerPresence() });
+    this.addCommand({ id: 'prevenir-connexions', name: 'Prévenir quand un ami se connecte (activer/désactiver)', callback: () => this.basculerNotificationsPresence() });
     this.addCommand({ id: 'synchroniser', name: 'Synchroniser maintenant', callback: () => this.lancer({ forcer: true }) });
     this.addCommand({ id: 'confirmer-suppressions', name: 'Confirmer les suppressions en attente (aussi chez les amis)', callback: () => this.confirmerSuppressions() });
     this.addCommand({ id: 'pause', name: 'Mettre en pause ou reprendre la synchronisation', callback: () => this.mettreEnPause(!this.etat.enPause) });
@@ -766,11 +768,13 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
 
   majPresence(liste) {
     const propre = liste.filter((p) => p && typeof p.nom === 'string').map((p) => ({ id: p.id, nom: p.nom, chemin: typeof p.chemin === 'string' ? p.chemin : null }));
+    const dejaConnue = this.presenceConnue !== null && this.coffrePresence === `${this.etat.serveur}/${this.etat.coffreId}`;
+    this.prevenirConnexions(propre);
     if (JSON.stringify(propre) === JSON.stringify(this.presence)) return;
     const actif = this.app.workspace.getActiveFile?.()?.path;
     const avant = new Set(this.presence.filter((p) => p.chemin === actif).map((p) => p.id));
-    const arrives = propre.filter((p) => actif && p.chemin === actif && !avant.has(p.id));
-    if (arrives.length) new O.Notice(`Cordée : ${arrives.map((p) => p.nom).join(', ')} ${arrives.length > 1 ? 'sont' : 'est'} aussi sur cette note.`, 5000);
+    const arrives = propre.filter((p) => actif && p.chemin === actif && !avant.has(p.id) && this.presence.some((a) => a.id === p.id));
+    if (dejaConnue && arrives.length) new O.Notice(`Cordée : ${arrives.map((p) => p.nom).join(', ')} ${arrives.length > 1 ? 'sont' : 'est'} aussi sur cette note.`, 5000);
     this.presence = propre;
     this.rafraichirMarques();
   }
@@ -782,7 +786,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   async annoncerPresence(chemin) {
     if (!this.connecte() || this.arret || this.presenceIndisponible) return;
     const partage = chemin && !this.moteur.ignorer(chemin) ? chemin : null;
-    const corps = this.etat.presenceMasquee || this.etat.enPause ? { parti: true } : { chemin: partage };
+    const corps = this.etat.presenceMasquee ? { parti: true, masquee: true } : this.etat.enPause ? { parti: true } : { chemin: partage };
     try {
       const r = await (await this.moteur.api('POST', `/api/coffres/${this.etat.coffreId}/presence`, corps)).json();
       if (Array.isArray(r.presence)) this.majPresence(r.presence);
@@ -793,10 +797,40 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.etat.presenceMasquee = !this.etat.presenceMasquee;
     try { await this.saveData(this.etat); } catch { /* simple préférence */ }
     await this.annoncerPresence(this.app.workspace.getActiveFile?.()?.path ?? null);
-    new O.Notice(this.etat.presenceMasquee ? 'Cordée : les autres ne voient plus quelle note tu as ouverte.' : 'Cordée : les autres voient à nouveau quelle note tu as ouverte.');
+    new O.Notice(this.etat.presenceMasquee ? 'Cordée : ta présence et ta dernière activité sont masquées.' : 'Cordée : ta présence et ta dernière activité sont à nouveau visibles.');
   }
 
   presenceSur(chemin) { return this.presence.filter((p) => p.chemin === chemin); }
+
+  /* ---------- Arrivée des amis : discrète et sans répétition ---------- */
+
+  initialiserConnexions() {
+    this.presenceConnue = null;
+    this.coffrePresence = `${this.etat.serveur}/${this.etat.coffreId}`;
+    this.etat.alertesConnexions = Object.fromEntries(Object.entries(this.etat.alertesConnexions || {}).filter(([, t]) => Number.isFinite(t) && Date.now() - t < 30 * 60_000));
+  }
+
+  prevenirConnexions(liste) {
+    const coffre = `${this.etat.serveur}/${this.etat.coffreId}`;
+    if (coffre !== this.coffrePresence) this.initialiserConnexions();
+    const t = Date.now();
+    const arrivees = arriveesPresence(this.presenceConnue, liste, this.etat.alertesConnexions, t, this.etat.prevenirConnexions, coffre);
+    // Le premier résultat réussi sert de point de départ, même s'il est vide.
+    this.presenceConnue = liste;
+    for (const ami of arrivees) {
+      this.etat.alertesConnexions[`${coffre}:${ami.id}`] = t;
+      new O.Notice(`${ami.nom} vient de se connecter`, 5000);
+    }
+    if (arrivees.length) this.saveData(this.etat).catch(() => {});
+  }
+
+  async basculerNotificationsPresence() {
+    const avant = this.etat.prevenirConnexions;
+    this.etat.prevenirConnexions = !avant;
+    try { await this.saveData(this.etat); }
+    catch { this.etat.prevenirConnexions = avant; new O.Notice('Impossible de conserver ce réglage. Vérifie que le coffre est accessible en écriture.'); return; }
+    new O.Notice(this.etat.prevenirConnexions ? 'Cordée : tu seras prévenu quand un ami se connecte.' : 'Cordée : les notifications de connexion sont désactivées.');
+  }
 
   /** Remet une ancienne version d'un fichier ; elle part chez les autres à la synchro suivante. */
   async restaurer(chemin, hash) {
@@ -1030,7 +1064,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   afficher() {
     const aVoir = this.connecte() ? this.nombreAVoir() : 0;
     const enLigne = this.connecte() ? [...new Set((this.presence || []).map((p) => p.nom))] : [];
-    this.barre.setText(`Cordée : ${this.titreStatut()}${aVoir ? ` · ${aVoir} à voir` : ''}${enLigne.length ? ` · ${enLigne.slice(0, 2).join(', ')}${enLigne.length > 2 ? '…' : ''} en ligne` : ''}`);
+    afficherBarrePresence(this.barre, `Cordée : ${this.titreStatut()}${aVoir ? ` · ${aVoir} à voir` : ''}`, enLigne);
     for (const actualiser of this.abonnesStatut) actualiser();
   }
 
@@ -1171,6 +1205,63 @@ function ilYa(date, maintenant = Date.now()) {
 
 const nomFichier = (chemin) => chemin.split('/').pop();
 const dossierDe = (chemin) => chemin.includes('/') ? chemin.slice(0, chemin.lastIndexOf('/')) : '';
+
+/* ---------- Présence des amis : dates, résumé et pastilles ---------- */
+
+function arriveesPresence(avant, apres, dernieres, maintenant, actif = true, coffre = '') {
+  if (avant === null || !actif) return [];
+  const connus = new Set(avant.map((p) => p.id));
+  const retenus = new Set();
+  return apres.filter((p) => {
+    if (!p.id || connus.has(p.id) || retenus.has(p.id)) return false;
+    retenus.add(p.id);
+    const derniere = dernieres[`${coffre}:${p.id}`];
+    return !Number.isFinite(derniere) || maintenant - derniere >= 30 * 60_000;
+  });
+}
+
+function derniereActivite(vuLe, maintenant = Date.now()) {
+  if (!Number.isFinite(vuLe) || vuLe <= 0) return 'pas encore connecté';
+  const aujourdHui = new Date(maintenant); aujourdHui.setHours(0, 0, 0, 0);
+  const hier = new Date(aujourdHui); hier.setDate(hier.getDate() - 1);
+  if (vuLe >= hier.getTime() && vuLe < aujourdHui.getTime()) return 'vu hier';
+  return `vu ${ilYa(vuLe, maintenant)}`;
+}
+
+function resumePresence(membres, presence, moiId, maintenant = Date.now()) {
+  const amis = membres.filter((m) => m.id !== moiId);
+  const ids = new Set(amis.map((m) => m.id));
+  const enLigne = presence.filter((p) => ids.has(p.id));
+  if (enLigne.length) return `${enLigne.slice(0, 2).map((p) => p.nom).join(', ')}${enLigne.length > 2 ? '…' : ''} ${enLigne.length > 1 ? 'sont' : 'est'} en ligne`;
+  const dernier = amis.slice().sort((a, b) => (b.vu_le || 0) - (a.vu_le || 0))[0];
+  return `Personne d’autre en ligne${dernier ? ` · ${dernier.nom} ${derniereActivite(dernier.vu_le, maintenant)}` : ''}`;
+}
+
+function afficherBarrePresence(barre, texte, noms) {
+  const suite = noms.length ? `${noms.slice(0, 2).join(', ')}${noms.length > 2 ? '…' : ''} en ligne` : '';
+  if (!barre.createEl) { barre.setText(texte + (suite ? ` · ${suite}` : '')); return; }
+  barre.setText(texte);
+  if (suite) {
+    barre.createEl('span', { text: ' · ' });
+    barre.createEl('span', { text: suite, cls: 'cordee-presence-barre' });
+  }
+}
+
+function ajouterPresenceMembre(tableau, identite, membre) {
+  const statut = identite.createEl('span', { cls: 'cordee-presence-membre' });
+  tableau.lignesPresence.push({ statut, membre });
+}
+
+function rafraichirPresenceTableau(tableau) {
+  const presence = tableau.plugin.presence || [];
+  for (const { statut, membre } of tableau.lignesPresence || []) {
+    const ici = presence.find((p) => p.id === membre.id);
+    statut.setAttribute('data-en-ligne', String(!!ici));
+    statut.setText(ici ? `en ligne${ici.chemin ? ` · sur ${nomFichier(ici.chemin)}` : ''}` : derniereActivite(membre.vu_le));
+  }
+  tableau.resumePresence?.setText(resumePresence(tableau.membresPresence || [], presence, tableau.moiPresence));
+}
+
 // Valeur d'attribut CSS entre guillemets : seuls le guillemet, l'antislash et les retours à la ligne gênent.
 const echapperCss = (s) => String(s).replace(/["\\]/g, '\\$&').replace(/\n/g, '\\a ');
 
@@ -1638,6 +1729,7 @@ if (O) {
       const titres = entete.createEl('div');
       titres.createEl('div', { text: 'CORDÉE', cls: 'cordee-surtitre' });
       titres.createEl('h2', { text: `Coffre partagé : ${plugin.etat.nomCoffre || 'Notre coffre'}`, cls: 'cordee-titre' });
+      this.resumePresence = titres.createEl('p', { cls: 'cordee-presence-resume' });
       const commandes = entete.createEl('div', { cls: 'cordee-commandes' });
       boutonCordee(commandes, 'Mon profil', () => new ProfilModal(app, plugin).open(), { cls: 'cordee-bouton-discret' });
       boutonCordee(commandes, 'Inviter', () => plugin.inviter(), { label: 'Créer une invitation', cls: 'cordee-bouton-principal' });
@@ -1659,6 +1751,7 @@ if (O) {
       this.aVoirEl = tableau.createEl('div', { cls: 'cordee-a-voir' });
       this.desabonner = plugin.abonnerStatut(() => {
         this.afficherAVoir();
+        rafraichirPresenceTableau(this);
         // Dans le panneau latéral, l'activité suit toute seule : nouvelle révision ou présence qui change.
         const presence = JSON.stringify(plugin.presence || []);
         if (this.revChargee !== undefined && plugin.phase !== 'synchro' && (plugin.etat.derniereRev !== this.revChargee || presence !== this.presenceChargee)) this.charger();
@@ -1749,6 +1842,7 @@ if (O) {
         if (!this.actif() || this.tour !== tour) return;
         if (!filtre) this.comptes = info.changements.reduce((comptes, ch) => comptes.set(ch.auteurId, (comptes.get(ch.auteurId) || 0) + 1), new Map());
         this.nombre.setText(`${info.membres.length} membre${info.membres.length > 1 ? 's' : ''}`);
+        this.membresPresence = info.membres; this.moiPresence = info.moiId; this.lignesPresence = [];
         this.membresEl.empty();
         const tous = boutonCordee(this.membresEl, 'Tous', () => { this.filtre = null; return this.charger(); }, { cls: 'cordee-collegue cordee-collegue-tous', attr: { 'aria-pressed': String(!filtre) } });
         tous.createEl('span', { text: 'Toute la cordée', cls: 'cordee-details' });
@@ -1759,10 +1853,10 @@ if (O) {
           const identite = bouton.createEl('span', { cls: 'cordee-collegue-identite' });
           identite.createEl('strong', { text: membre.nom });
           const n = this.comptes.get(membre.id) || 0;
-          const ici = (this.plugin.presence || []).find((pr) => pr.id === membre.id);
-          if (ici) { bouton.addClass?.('cordee-collegue-en-ligne'); identite.createEl('span', { text: ici.chemin ? `en ligne · sur ${nomFichier(ici.chemin)}` : 'en ligne', cls: 'cordee-en-ligne' }); }
+          ajouterPresenceMembre(this, identite, membre);
           identite.createEl('span', { text: membre.id ? (n ? `${n} changement${n > 1 ? 's' : ''} récent${n > 1 ? 's' : ''}` : 'Rien de récent') : 'Membre du groupe', cls: 'cordee-details' });
         }
+        rafraichirPresenceTableau(this);
         const selection = info.membres.find((m) => m.id === filtre);
         this.titreActivite.setText(filtre ? `Changements de ${selection?.nom || 'ce membre'}` : 'Derniers changements');
         this.information.setText(ancien ? 'Serveur ancien : mets Cordée à jour pour filtrer tous les membres et comparer les versions.' : '40 changements maximum · Clique sur un fichier pour comparer ses versions.');
@@ -2150,4 +2244,4 @@ if (O) {
 
 module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
-module.exports.interne = { get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
+module.exports.interne = { get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, arriveesPresence, derniereActivite, resumePresence, afficherBarrePresence, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
