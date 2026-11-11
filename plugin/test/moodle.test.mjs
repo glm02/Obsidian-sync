@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { nomMoodle, dossierMoodle, siteMoodle, fichiersMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle } = require('../main.js').interne;
+const { nomMoodle, dossierMoodle, siteMoodle, fichiersMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, markdownMoodle, devoirMoodle, noteAnnoncesMoodle } = require('../main.js').interne;
 const fichier = (autre = {}) => ({ type: 'file', filename: 'cours.pdf', filepath: '/', fileurl: 'https://moodle.exemple.fr/webservice/pluginfile.php/12/cours.pdf', filesize: 120, timemodified: 17, ...autre });
 const sections = [{ id: 1, name: 'TD / TP', modules: [
   { id: 10, modname: 'resource', contents: [fichier()] },
@@ -78,4 +78,37 @@ test('Moodle : index avec sections et liens locaux, sans URL ou jeton Moodle', (
   assert.ok(index.includes('[[Moodle/ENER3/TD - TP/cours (Moodle).pdf|cours.pdf]]'));
   assert.match(index, /sujet.pdf — pas encore récupéré/);
   assert.doesNotMatch(index, /https:|fileurl|wstoken/);
+});
+
+test('Moodle : HTML converti en paragraphes et listes, scripts et liens actifs éliminés', () => {
+  const texte = markdownMoodle('<p>Bonjour &eacute;tudiants&nbsp;!</p><ul><li>TD &amp; TP</li><li><a href="https://exemple.fr?token=factice">Sujet</a></li></ul><script>alert(1)</script><img src=x onerror=alert(2)><iframe src="https://exemple.fr">interdit</iframe>');
+  assert.match(texte, /Bonjour étudiants \\!/);
+  assert.match(texte, /- TD & TP/);
+  assert.match(texte, /- Sujet/);
+  assert.doesNotMatch(texte, /<|>|script|alert|interdit|token=factice|https:/);
+  assert.doesNotMatch(markdownMoodle('&lt;script&gt;alert(3)&lt;/script&gt;<p>Texte</p>'), /script|alert|<|>/);
+  assert.doesNotMatch(markdownMoodle('&amp;lt;script&amp;gt;alert(4)&amp;lt;/script&amp;gt;'), /script|alert|<|>/);
+  assert.equal(markdownMoodle('<p>![image](https://exemple.fr)</p>').startsWith('\\!\\['), true);
+});
+
+test('Moodle : devoirs individuels, brouillons, rendus en groupe et prolongations', () => {
+  const devoir = { id: 1, cmid: 45, name: '<b>TP énergie</b>', duedate: 1900000000 };
+  const c = { shortname: 'ENER3' };
+  const entree = devoirMoodle(devoir, c, { lastattempt: { submission: { status: 'submitted' } } }, 'https://moodle.exemple.fr');
+  assert.deepEqual(entree, { titre: 'TP énergie', cours: 'ENER3', debut: 1900000000000, rendu: true, url: 'https://moodle.exemple.fr/mod/assign/view.php?id=45' });
+  assert.equal(devoirMoodle(devoir, c, { lastattempt: { submission: { status: 'draft' } } }, 'https://moodle.exemple.fr').rendu, false);
+  const groupe = devoirMoodle(devoir, c, { lastattempt: { teamsubmission: { status: 'submitted' }, extensionduedate: 1900010000 } }, 'https://moodle.exemple.fr');
+  assert.equal(groupe.rendu, true);
+  assert.equal(groupe.debut, 1900010000000);
+  assert.equal(devoirMoodle({ ...devoir, duedate: 0 }, c, {}, 'https://moodle.exemple.fr'), null);
+});
+
+test('Moodle : les vingt dernières annonces sont datées, attribuées, triées et sans HTML', () => {
+  const discussions = Array.from({ length: 25 }, (_, i) => ({ id: i + 1, subject: `Annonce ${i}`, created: 1900000000 + i, userfullname: 'Équipe test', message: `<p>Texte ${i}</p><script>intrusion()</script>` }));
+  const note = noteAnnoncesMoodle({ shortname: 'ENER3' }, discussions);
+  assert.equal((note.match(/^## /gm) || []).length, 20);
+  assert.ok(note.indexOf('Annonce 24') < note.indexOf('Annonce 23'));
+  assert.match(note, /Annonce 5\n/);
+  assert.doesNotMatch(note, /Annonce 4\n|<|>|script|intrusion/);
+  assert.match(note, /Équipe test/);
 });

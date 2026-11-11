@@ -876,6 +876,8 @@ async function moodleSimule() {
     if (!r.body) return { status: 200, arrayBuffer: new TextEncoder().encode(texte).buffer, headers: { 'content-type': 'application/pdf' } };
     const param = new URLSearchParams(r.body);
     if (param.get('wsfunction') === 'core_enrol_get_users_courses') return { status: 200, json: [{ id: 3, shortname: 'ENER3', fullname: 'Énergie 3' }] };
+    if (param.get('wsfunction') === 'mod_assign_get_assignments') return { status: 200, json: { courses: [] } };
+    if (param.get('wsfunction') === 'mod_forum_get_forums_by_courses') return { status: 200, json: [] };
     assert.equal(param.get('wsfunction'), 'core_course_get_contents');
     return { status: 200, json: [{ id: 1, name: 'Cours', modules: [{ id: 12, modname: 'resource', contents: [source] }] }] };
   };
@@ -1013,4 +1015,114 @@ test('Moodle : fichiers supprimés localement récupérés à nouveau et cours n
   elements.delete('Moodle/ENER3/Cours/cours.pdf');
   assert.equal(await plugin.recupererMoodle(), 1);
   assert.equal(appels.filter((r) => !r.body).length, 2);
+});
+
+test('Moodle : les devoirs à venir se lisent sans réseau depuis un cache privé actualisé avec les fichiers', async () => {
+  const { plugin, obsidian, texte } = await moodleSimule();
+  const avant = obsidian.requestUrl, echeance = Math.floor(Date.now() / 1000) + 86400;
+  let rendu = false, appels = 0;
+  obsidian.requestUrl = async (r) => {
+    const param = new URLSearchParams(r.body), fonction = param.get('wsfunction');
+    if (fonction === 'mod_assign_get_assignments') {
+      appels++; assert.equal(param.get('courseids[0]'), '3');
+      return { status: 200, json: { courses: [{ id: 3, assignments: [{ id: 15, cmid: 44, name: 'Rendu TP', duedate: echeance }, { id: 16, cmid: 45, name: 'Ancien devoir', duedate: 1 }] }] } };
+    }
+    if (fonction === 'mod_assign_get_submission_status') {
+      appels++; assert.equal(param.get('userid'), '42');
+      return { status: 200, json: { lastattempt: { submission: { status: rendu ? 'submitted' : 'draft' } } } };
+    }
+    return avant(r);
+  };
+  await plugin.recupererMoodle();
+  const appelsAvant = appels, devoirs = plugin.devoirsMoodle();
+  assert.equal(devoirs.length, 1);
+  assert.equal(devoirs[0].titre, 'Rendu TP');
+  assert.equal(devoirs[0].cours, 'ENER3');
+  assert.equal(devoirs[0].debut, echeance * 1000);
+  assert.equal(devoirs[0].rendu, false);
+  assert.equal(devoirs[0].url, 'https://moodle.exemple.fr/mod/assign/view.php?id=44');
+  devoirs[0].titre = 'modification externe';
+  assert.equal(plugin.devoirsMoodle()[0].titre, 'Rendu TP');
+  assert.equal(appels, appelsAvant);
+  assert.doesNotMatch(texte('Moodle/ENER3/Cours.md'), /Rendu TP|submitted|rendu/);
+  rendu = true; await plugin.recupererMoodle();
+  assert.equal(plugin.devoirsMoodle()[0].rendu, true);
+  await plugin.deconnecterMoodle();
+  assert.equal(plugin.devoirsMoodle().length, 0);
+});
+
+test('Moodle : les annonces news sont partagées sans HTML, avec protection des annotations locales', async () => {
+  const { plugin, obsidian, texte, mettre } = await moodleSimule();
+  const avant = obsidian.requestUrl;
+  let titre = 'Annonce test';
+  obsidian.requestUrl = async (r) => {
+    const param = new URLSearchParams(r.body), fonction = param.get('wsfunction');
+    if (fonction === 'mod_forum_get_forums_by_courses') return { status: 200, json: [{ id: 9, course: 3, type: 'news' }, { id: 10, course: 3, type: 'general' }] };
+    if (fonction === 'mod_forum_get_forum_discussions') {
+      assert.equal(param.get('forumid'), '9'); assert.equal(param.get('perpage'), '20'); assert.equal(param.get('sortorder'), '3');
+      return { status: 200, json: { discussions: [{ id: 5, subject: titre, created: 1900000000, userfullname: 'Équipe test', message: '<p>Apporte ton <b>multimètre</b>.</p><script>interdit()</script>' }] } };
+    }
+    return avant(r);
+  };
+  await plugin.recupererMoodle();
+  const note = texte('Moodle/ENER3/Annonces.md');
+  assert.match(note, /Annonce test/); assert.match(note, /Équipe test/); assert.match(note, /Apporte ton multimètre/);
+  assert.doesNotMatch(note, /<|>|script|interdit|jeton-import-factice/);
+  mettre('Moodle/ENER3/Annonces.md', 'mes annotations');
+  titre = 'Annonce suivante'; await plugin.recupererMoodle();
+  assert.equal(texte('Moodle/ENER3/Annonces.md'), 'mes annotations');
+  assert.match(texte('Moodle/ENER3/Annonces (Moodle).md'), /Annonce suivante/);
+});
+
+test('Moodle : une API de devoirs indisponible préserve son cache et laisse récupérer les cours', async () => {
+  const { plugin, obsidian, texte, rendu } = await moodleSimule();
+  const avant = obsidian.requestUrl;
+  plugin.etat.moodle.devoirs = [{ titre: 'Dernier état connu', cours: 'ENER3', debut: Date.now() + 86400000, rendu: false, url: 'https://moodle.exemple.fr/mod/assign/view.php?id=1' }];
+  obsidian.requestUrl = async (r) => new URLSearchParams(r.body).get('wsfunction') === 'mod_assign_get_assignments'
+    ? { status: 200, json: { exception: 'webservice_access_exception', errorcode: 'invalidfunction', message: 'erreur-technique-factice' } } : avant(r);
+  assert.equal(await plugin.recupererMoodle(), 1);
+  assert.equal(texte('Moodle/ENER3/Cours/cours.pdf'), 'cours 1');
+  assert.equal(plugin.devoirsMoodle()[0].titre, 'Dernier état connu');
+  assert.match(rendu.notice, /devoirs n’ont pas pu être actualisés/);
+  assert.doesNotMatch(rendu.notice, /erreur-technique-factice/);
+});
+
+test('Moodle : les notes personnelles ne sont ni écrites dans le coffre ni sauvegardées', async () => {
+  const { plugin, obsidian, interne, rendu, elements } = await moodleSimule();
+  const avant = obsidian.requestUrl;
+  let sauvegardes = 0; plugin.saveData = async () => { sauvegardes++; };
+  obsidian.requestUrl = async (r) => {
+    const param = new URLSearchParams(r.body);
+    if (param.get('wsfunction') !== 'gradereport_user_get_grade_items') return avant(r);
+    assert.equal(param.get('userid'), '42'); assert.equal(param.get('courseid'), '3');
+    return { status: 200, json: { usergrades: [
+      { userid: 42, gradeitems: [{ itemname: '<b>Évaluation privée</b>', gradeformatted: '<span>17,25</span>', rangeformatted: '0–20' }, { itemname: 'Note cachée', itemhidden: true, gradeformatted: '19' }] },
+      { userid: 43, gradeitems: [{ itemname: 'Note d’un autre étudiant', gradeformatted: '12' }] },
+    ] } };
+  };
+  const modal = new interne.NotesMoodleModal(plugin.app, plugin);
+  await modal.open();
+  assert.ok(rendu.textes.includes('Mes notes Moodle'));
+  assert.ok(rendu.textes.includes('Évaluation privée · 17,25 · 0–20'));
+  assert.equal(rendu.textes.some((t) => /Note cachée|autre étudiant/.test(t)), false);
+  assert.equal(sauvegardes, 0); assert.equal(elements.size, 0);
+  assert.doesNotMatch(JSON.stringify(plugin.etat), /17,25|Évaluation privée|gradeitems/);
+  await plugin.deconnecterMoodle();
+  assert.equal(modal.contentEl.enfants.length, 0);
+  assert.equal(plugin.modalNotesMoodle, null);
+});
+
+test('Moodle : fermer les notes pendant leur lecture ignore la réponse tardive', async () => {
+  const { plugin, obsidian, interne, rendu, elements } = await moodleSimule();
+  const avant = obsidian.requestUrl;
+  let debut, liberer;
+  const requete = new Promise((r) => { debut = r; });
+  obsidian.requestUrl = async (r) => {
+    if (new URLSearchParams(r.body).get('wsfunction') !== 'gradereport_user_get_grade_items') return avant(r);
+    debut(); return new Promise((resolve) => { liberer = () => resolve({ status: 200, json: { usergrades: [{ userid: 42, gradeitems: [{ itemname: 'Note tardive privée', gradeformatted: '16' }] }] } }); });
+  };
+  const modal = new interne.NotesMoodleModal(plugin.app, plugin), ouverture = modal.open();
+  await requete; modal.onClose(); liberer(); await ouverture;
+  assert.equal(rendu.textes.some((t) => String(t).includes('Note tardive privée')), false);
+  assert.equal(elements.size, 0);
 });
