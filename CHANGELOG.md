@@ -1,5 +1,14 @@
 # Nouveautés
 
+## 0.2.0
+
+- **Panneau toujours visible** dans la barre latérale droite (icône Cordée, barre d’état ou commande) : état, « À voir », membres et activité, qui se mettent à jour tout seuls.
+- **Présence** : tu vois qui est en ligne et sur quelle note (pastille à son nom dans l’explorateur, « en ligne · sur … » dans le panneau, barre d’état). Une alerte te prévient quand un ami ouvre la note où tu es. Seul le chemin d’une note partagée est transmis, jamais celui d’un dossier non partagé ; la commande « Montrer ou masquer… » coupe la présence.
+- **Historique d’une note** : clic droit sur un fichier → « Historique Cordée », ou commande. Toutes les versions, qui, quand ; un clic compare.
+- **Restaurer une version** depuis la comparaison : « Restaurer cette version », « Revenir à la version d’avant » ou « Récupérer le fichier supprimé », avec confirmation. La version restaurée part chez tous ; l’ancienne reste dans l’historique.
+- **Alerte en direct** quand un ami modifie la note que tu as sous les yeux.
+- Serveur : routes de présence (en mémoire seulement, effacée après 90 s) et d’historique. Un ancien serveur continue de synchroniser ; ces fonctions s’affichent alors comme indisponibles.
+
 ## 0.1.7
 
 - **Les modifications de tes amis se voient dans la note.** Les lignes ajoutées ou changées par un ami sont surlignées à sa couleur, avec une étiquette « Prénom · +3 lignes −1 ligne · il y a 5 min » et un bouton « Vu ». Une ligne que tu retouches n’est plus surlignée.

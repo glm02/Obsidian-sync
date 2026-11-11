@@ -163,7 +163,7 @@ test('les photos sont limitées à leur coffre et les changements gardent un aut
     assert.equal(membres.find((m: { id: string }) => m.id === bob.id).avatar, null);
     assert.equal((await s.appel('GET', route, undefined, b.jeton)).statut, 403);
     assert.deepEqual((await s.appel('GET', route + '?revision=1', undefined, ami.jeton)).json,
-      { id: a.coffreId, nom: 'Photos', rev: 0 });
+      { id: a.coffreId, nom: 'Photos', rev: 0, presence: [] });
     assert.equal((await s.appel('GET', route + '?revision=1', undefined, b.jeton)).statut, 403);
 
     const contenu = 'Modification attribuee';
@@ -403,7 +403,7 @@ test('l’activité est récente, filtrable par identifiant et limitée sans exp
     assert.equal((await activite('?auteur=%27%20OR%201%3D1')).statut, 400);
     assert.equal((await s.appel('GET', route + '/activite')).statut, 401);
     assert.equal((await s.appel('GET', route + '/activite', undefined, b.jeton)).statut, 403);
-    assert.deepEqual(Object.keys((await s.appel('GET', route + '?revision=1', undefined, a.jeton)).json).sort(), ['id', 'nom', 'rev']);
+    assert.deepEqual(Object.keys((await s.appel('GET', route + '?revision=1', undefined, a.jeton)).json).sort(), ['id', 'nom', 'presence', 'rev']);
   } finally { await s.arreter(); }
 });
 
@@ -456,5 +456,46 @@ test("le serveur retient la version de l'extension de chaque membre, sans accept
     await avec(b.jeton, '0.1.4');
     const apres = (await s.appel('GET', `/api/coffres/${c.coffreId}`, undefined, c.jeton)).json;
     assert.equal(apres.membres.find((m: { nom: string }) => m.nom === 'Bruno').version, '0.1.4');
+  } finally { await s.arreter(); }
+});
+
+test("présence : chacun voit quelle note les autres ont ouverte, et elle s'efface quand on part", async () => {
+  const s = await demarrer();
+  try {
+    const c = (await s.appel('POST', '/api/coffres', { nom: 'P', prenom: 'Alice', codeCreation: CODE })).json;
+    const code = (await s.appel('POST', `/api/coffres/${c.coffreId}/invitations`, {}, c.jeton)).json.code;
+    const b = (await s.appel('POST', '/api/rejoindre', { code, prenom: 'Bruno' })).json;
+    const route = `/api/coffres/${c.coffreId}`;
+    assert.equal((await s.appel('POST', route + '/presence', { chemin: '../secret' }, b.jeton)).statut, 400);
+    assert.equal((await s.appel('POST', route + '/presence', { chemin: 'Cours/TD.md' }, b.jeton)).statut, 200);
+    const vu = (await s.appel('GET', route + '?revision=1', undefined, c.jeton)).json;
+    assert.deepEqual(vu.presence.map((p: { nom: string; chemin: string }) => [p.nom, p.chemin]), [['Bruno', 'Cours/TD.md']]);
+    // On ne se voit pas soi-même.
+    assert.deepEqual((await s.appel('GET', route + '?revision=1', undefined, b.jeton)).json.presence, []);
+    await s.appel('POST', route + '/presence', { parti: true }, b.jeton);
+    assert.deepEqual((await s.appel('GET', route + '?revision=1', undefined, c.jeton)).json.presence, []);
+    assert.equal((await s.appel('POST', route + '/presence', { chemin: 'x.md' })).statut, 401);
+  } finally { await s.arreter(); }
+});
+
+test("historique d'une note : ses versions de la plus récente à la plus ancienne, et seulement elle", async () => {
+  const s = await demarrer();
+  try {
+    const c = (await s.appel('POST', '/api/coffres', { nom: 'H', prenom: 'Alice', codeCreation: CODE })).json;
+    const route = `/api/coffres/${c.coffreId}`;
+    const ecrire = async (chemin: string, texte: string, base: string | null) => {
+      const h = sha(texte);
+      await fetch(s.url + route + '/blobs/' + h, { method: 'PUT', headers: { Authorization: 'Bearer ' + c.jeton }, body: texte });
+      await s.appel('POST', route + '/fichiers', { chemin, hash: h, base }, c.jeton);
+      return h;
+    };
+    const v1 = await ecrire('a.md', 'un', null);
+    await ecrire('b.md', 'autre', null);
+    const v2 = await ecrire('a.md', 'deux', v1);
+    const h = (await s.appel('GET', route + '/historique?chemin=a.md', undefined, c.jeton)).json;
+    assert.deepEqual(h.changements.map((x: { hash: string }) => x.hash), [v2, v1]);
+    assert.equal(h.changements[0].avantHash, v1);
+    assert.equal(h.changements[0].auteur, 'Alice');
+    assert.equal((await s.appel('GET', route + '/historique?chemin=..%2Fx', undefined, c.jeton)).statut, 400);
   } finally { await s.arreter(); }
 });

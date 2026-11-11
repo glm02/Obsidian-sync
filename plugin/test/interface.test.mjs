@@ -620,3 +620,79 @@ test('les modifications de plus d’une semaine ne sont plus « à voir » au d�
   await plugin.onload();
   assert.deepEqual([...Object.keys(plugin.etat.aVoir)], ['recent.md']);
 });
+
+test('présence : on voit qui est en ligne et sur quelle note, et une note privée n’est jamais annoncée', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST, dossiersIgnores: 'Perso' }, { setTimeout: (f) => { f(); return 0; } });
+  plugin.app.workspace.getActiveFile = () => ({ path: 'Cours.md' });
+  await plugin.onload();
+  let barre = ''; plugin.barre.setText = (t) => { barre = t; };
+  plugin.majPresence([{ id: 'b', nom: 'Paulo', chemin: 'Cours.md' }]);
+  assert.match(rendu.notice, /Paulo est aussi sur cette note/);
+  assert.match(barre, /Paulo en ligne/);
+  assert.equal(plugin.presenceSur('Cours.md')[0].nom, 'Paulo');
+  const envois = [];
+  plugin.moteur.api = async (methode, chemin, corps) => { envois.push(corps); return { json: async () => ({ presence: [] }) }; };
+  await plugin.annoncerPresence('Perso/journal.md');
+  assert.equal(envois[0].chemin, null, 'un dossier non partagé reste secret');
+  await plugin.annoncerPresence('Cours.md');
+  assert.equal(envois[1].chemin, 'Cours.md');
+  plugin.etat.presenceMasquee = true;
+  await plugin.annoncerPresence('Cours.md');
+  assert.equal(envois[2].parti, true, 'présence masquée : on part');
+  plugin.moteur.api = async () => { throw Object.assign(new Error('absent'), { statut: 404 }); };
+  plugin.etat.presenceMasquee = false;
+  await plugin.annoncerPresence('Cours.md');
+  assert.equal(plugin.presenceIndisponible, true, 'ancien serveur : on n’insiste pas');
+});
+
+test('un ami modifie la note ouverte : une alerte le dit, ses lignes sont « à voir »', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST }, { setTimeout: (f) => { f(); return 0; } });
+  plugin.app.workspace.getActiveFile = () => ({ path: 'Cours.md' });
+  await plugin.onload();
+  plugin.moteur.signaler('modifie-par', 'Cours.md', { auteur: 'Paulo', le: Date.now(), lignes: ['x'], ajouts: 2, suppressions: 1, nouveau: false, texte: true });
+  assert.match(rendu.notice, /Paulo vient de modifier cette note \(\+2 lignes −1 ligne\)/);
+});
+
+test('restaurer une version : téléchargée puis écrite, et la note n’est plus « à voir »', async () => {
+  const { plugin } = charger({ ...ETAT_TEST, aVoir: { 'a.md': { auteurs: ['Paulo'], le: Date.now(), lignes: [] } } }, { setTimeout: (f) => { f(); return 0; } });
+  await plugin.onload();
+  const ecrits = [];
+  plugin.moteur.telecharger = async (hash) => new TextEncoder().encode('version ' + hash).buffer;
+  plugin.moteur.fichiers.ecrire = async (chemin, buf) => { ecrits.push([chemin, new TextDecoder().decode(buf)]); };
+  plugin.programmer = () => {};
+  await plugin.restaurer('a.md', 'h1');
+  assert.deepEqual(ecrits, [['a.md', 'version h1']]);
+  assert.equal(plugin.etat.aVoir['a.md'], undefined);
+});
+
+test('comparaison : « Restaurer » demande une confirmation avant de remplacer la note', async () => {
+  const { plugin, rendu, interne } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  const restaures = [];
+  plugin.restaurer = async (chemin, hash) => { restaures.push([chemin, hash]); };
+  plugin.moteur.api = async () => ({ json: async () => ({ raison: null, avant: 'a', apres: 'b', changement: { rev: 5, chemin: 'a.md', hash: 'h2', avantHash: 'h1', auteur: 'Paulo', auteurId: 'p', le: Date.now(), supprime: false, type: 'fichier' } }) });
+  await new interne.RevisionModal(plugin.app, plugin, 5, null).open();
+  assert.ok(rendu.boutons.has('Restaurer cette version'));
+  assert.ok(rendu.boutons.has('Revenir à la version d’avant'));
+  await rendu.boutons.get('Revenir à la version d’avant')();
+  assert.deepEqual(restaures, [], 'le premier clic ne fait que demander confirmation');
+  const confirmer = [...rendu.boutons.keys()].find((k) => k.startsWith('Confirmer'));
+  await rendu.boutons.get(confirmer)();
+  assert.deepEqual(restaures, [['a.md', 'h1']]);
+});
+
+test('historique d’une note : chaque version avec son auteur, la plus récente marquée', async () => {
+  const { plugin, rendu, interne } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  let demande = '';
+  plugin.moteur.api = async (m, chemin) => { demande = chemin; return { json: async () => ({ membres: [], changements: [
+    { rev: 9, chemin: 'S3/a.md', auteur: 'Paulo', auteurId: 'p', le: Date.now() - 60_000, hash: 'h2', avantHash: 'h1', supprime: false },
+    { rev: 3, chemin: 'S3/a.md', auteur: 'raf', auteurId: 'r', le: Date.now() - 3_600_000, hash: 'h1', avantHash: null, supprime: false },
+  ] }) }; };
+  await new interne.HistoriqueModal(plugin.app, plugin, 'S3/a.md').open();
+  assert.match(demande, /historique\?chemin=S3%2Fa\.md/);
+  assert.ok(rendu.textes.includes('a.md'));
+  assert.ok(rendu.textes.some((t) => t.startsWith('Paulo · ')));
+  assert.ok(rendu.textes.some((t) => t.includes('version actuelle')));
+  assert.ok(rendu.boutons.has('Comparer la révision 3'));
+});

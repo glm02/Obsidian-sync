@@ -147,6 +147,18 @@ export function creerServeur(opts: Options) {
 
   const codeCreationHash = sha256(opts.codeCreation);
   const abonnes = new Map<string, Set<http.ServerResponse>>();
+  // Présence : quelle note chaque membre a ouverte, en mémoire seulement (rien n'est écrit sur disque).
+  // L'extension la renouvelle toutes les 45 s ; sans nouvelle depuis 90 s, le membre n'est plus « là ».
+  const presences = new Map<string, Map<string, { nom: string; chemin: string | null; jusqua: number }>>();
+  function presenceDu(coffreId: string, sauf?: string) {
+    const t = maintenant();
+    const liste: Array<{ id: string; nom: string; chemin: string | null }> = [];
+    for (const [id, p] of presences.get(coffreId) ?? []) {
+      if (p.jusqua < t) { presences.get(coffreId)!.delete(id); continue; }
+      if (id !== sauf) liste.push({ id, nom: p.nom, chemin: p.chemin });
+    }
+    return liste;
+  }
   const limites = new Map<string, { n: number; fin: number }>();
 
   // Limite les tentatives sur les routes qui acceptent un code, pour empêcher de les deviner.
@@ -303,7 +315,7 @@ export function creerServeur(opts: Options) {
 
       if (m === 'GET' && sous === '') {
         // Le sondage fréquent de la synchronisation n'a pas besoin de télécharger les photos.
-        if (url.searchParams.get('revision') === '1') return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev });
+        if (url.searchParams.get('revision') === '1') return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev, presence: presenceDu(coffreId, moi.id) });
         const membres = membresDuCoffre(coffreId);
         return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev, moi: moi.nom, moiId: moi.id, membres });
       }
@@ -344,6 +356,29 @@ export function creerServeur(opts: Options) {
         const plus = lignes.length > 1000;
         const changements = lignes.slice(0, 1000).map(exposerChangement);
         return envoyer(res, 200, { rev: coffre.rev, changements, plus });
+      }
+
+      if (m === 'POST' && sous === '/presence') {
+        const b = await lireJson(req);
+        const chemin = b.chemin === null || b.chemin === undefined ? null : b.chemin;
+        if (chemin !== null && !cheminValide(chemin)) throw new ErreurHttp(400, 'Chemin invalide.');
+        if (b.parti === true) presences.get(coffreId)?.delete(moi.id);
+        else {
+          if (!presences.has(coffreId)) presences.set(coffreId, new Map());
+          presences.get(coffreId)!.set(moi.id, { nom: moi.nom, chemin, jusqua: maintenant() + 90_000 });
+        }
+        return envoyer(res, 200, { presence: presenceDu(coffreId, moi.id) });
+      }
+
+      // Historique d'une note : toutes ses versions, de la plus récente à la plus ancienne.
+      if (m === 'GET' && sous === '/historique') {
+        const chemin = url.searchParams.get('chemin') || '';
+        if (!cheminValide(chemin)) throw new ErreurHttp(400, 'Chemin invalide.');
+        const demande = Number(url.searchParams.get('limite') || 50);
+        const limite = Number.isFinite(demande) ? Math.max(1, Math.min(200, Math.floor(demande))) : 50;
+        const lignes = db.prepare(`${selectionChangements} WHERE c.coffre_id = ? AND c.chemin = ? AND c.type = 'fichier' ORDER BY c.rev DESC LIMIT ?`)
+          .all(coffreId, chemin, limite) as unknown as ChangementStocke[];
+        return envoyer(res, 200, { chemin, changements: lignes.map(exposerChangement), membres: membresDuCoffre(coffreId) });
       }
 
       if (m === 'GET' && sous === '/activite') {

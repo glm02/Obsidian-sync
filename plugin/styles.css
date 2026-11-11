@@ -124,6 +124,24 @@
 .cordee-profil-apercu .cordee-avatar { width: 64px; height: 64px; flex-basis: 64px; }
 .cordee-choix-photo { display: block; width: 100%; max-width: 100%; margin-block: 8px 16px; }
 
+/* ---------- V2 : panneau latéral, présence, historique, restauration ---------- */
+.cordee-vue { padding: var(--size-4-3) var(--size-4-3) var(--size-4-4); }
+.cordee-vue .cordee-tableau { gap: var(--size-4-3); }
+.cordee-vue .cordee-tableau-entete { align-items: flex-start; }
+.cordee-vue .cordee-titre { font-size: var(--font-ui-medium); }
+.cordee-vue .cordee-fichiers { max-height: none; }
+.cordee-vue .cordee-fichier { grid-template-columns: 24px minmax(0, 1fr) auto; gap: var(--size-4-2); padding: 7px 10px; }
+.cordee-vue .cordee-fichier .cordee-avatar { width: 24px; height: 24px; flex-basis: 24px; }
+.cordee-vue .cordee-type-changement { display: none; }
+.cordee-vue .cordee-fichier-dossier { display: none; }
+.cordee-vue .cordee-collegue-identite .cordee-details { display: none; }
+.cordee-en-ligne { color: var(--color-green); font-size: var(--font-ui-smaller); }
+.cordee-collegue-en-ligne .cordee-avatar { box-shadow: 0 0 0 2px var(--background-primary), 0 0 0 4px var(--color-green); }
+.cordee-restaurer { margin-top: var(--size-4-3); }
+.cordee-bouton-danger { border-color: var(--color-red); color: var(--color-red); }
+.cordee-bouton-danger:hover { background: color-mix(in srgb, var(--color-red) 12%, transparent); color: var(--color-red); }
+.cordee-historique { margin-top: var(--size-4-3); }
+
 @media (max-width: 480px) {
   .cordee-fichier { grid-template-columns: 24px minmax(0, 1fr); }
   .cordee-type-changement { display: none; }
