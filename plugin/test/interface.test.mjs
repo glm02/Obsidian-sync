@@ -270,6 +270,118 @@ test('les changements distants sont vérifiés sans flux fetch, puis arrêtés a
   assert.equal(synchros, 1);
 });
 
+test('une écriture continue part après 200 ms sans repousser la première échéance', async () => {
+  let horloge = 1000, id = 0;
+  const timers = new Map();
+  const { plugin } = charger({ ...ETAT_TEST }, {
+    Date: class extends Date { static now() { return horloge; } },
+    setTimeout: (f, ms) => { timers.set(++id, { f, ms }); return id; },
+    clearTimeout: (n) => timers.delete(n),
+  });
+  await plugin.onload();
+  let synchronisations = 0;
+  plugin.lancer = async () => { synchronisations++; };
+  plugin.etat.cache['note.md'] = { hash: 'ancien', mtime: 1, taille: 4 };
+  plugin.changementLocal({ path: 'note.md' });
+  assert.equal(plugin.etat.cache['note.md'], undefined);
+  assert.equal([...timers.values()][0].ms, 200);
+  horloge = 1100; plugin.changementLocal({ path: 'note.md' });
+  horloge = 1190; plugin.changementLocal({ path: 'note.md' });
+  assert.equal(timers.size, 1);
+  assert.equal(id, 1, 'les frappes suivantes ne repoussent pas le minuteur');
+  horloge = 1200;
+  const timer = [...timers.values()][0]; timers.clear(); await timer.f();
+  assert.equal(synchronisations, 1);
+  plugin.changementLocal({ path: 'note.md' });
+  assert.equal(id, 2, 'la frappe suivante programme un nouvel envoi');
+  plugin.programmer(0);
+  assert.equal(timers.size, 1);
+  assert.equal([...timers.values()][0].ms, 0, 'une notification distante avance l’échéance');
+  plugin.changementLocal({ path: 'configuration/plugins/cordee/data.json' });
+  assert.equal(id, 3, 'les réglages privés ne déclenchent rien');
+});
+
+test('un renommage vers un dossier exclu synchronise la disparition du chemin partagé', async () => {
+  const { plugin } = charger({ ...ETAT_TEST, dossiersIgnores: 'Perso' });
+  await plugin.onload();
+  const demandes = []; plugin.programmer = (ms) => demandes.push(ms);
+  plugin.etat.cache['note.md'] = { hash: 'ancien' };
+  plugin.changementLocal({ path: 'Perso/note.md' }, 'note.md');
+  assert.equal(plugin.etat.cache['note.md'], undefined);
+  assert.deepEqual(demandes, [200]);
+  plugin.changementLocal({ path: 'Perso/autre.md' });
+  assert.deepEqual(demandes, [200]);
+});
+
+test('le flux déclenche immédiatement la réception, s’arrête en pause et reprend sans doublon', async () => {
+  const connexions = [], demandes = [];
+  const { plugin } = charger({ ...ETAT_TEST, derniereRev: 3 }, {
+    AbortController, setTimeout,
+    fetch: async (url, options) => {
+      let controle;
+      const flux = new ReadableStream({ start(c) { controle = c; } });
+      options.signal.addEventListener('abort', () => controle.error(Error('arrêt')));
+      const envoyer = (rev) => controle.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ rev }) + '\n\n'));
+      connexions.push({ url, options, envoyer });
+      return new Response(flux, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+  await plugin.onload();
+  plugin.programmer = (ms) => { if (!plugin.etat.enPause && !plugin.arret) demandes.push(ms); };
+  plugin.lancer = async () => {};
+  plugin.maintenirFlux(); plugin.maintenirFlux();
+  await new Promise(setImmediate);
+  assert.equal(connexions.length, 1);
+  assert.equal(plugin.fluxRevisions.connecte, true);
+  connexions[0].envoyer(3); connexions[0].envoyer(4);
+  await new Promise(setImmediate);
+  assert.deepEqual(demandes, [0]);
+  const premier = plugin.fluxRevisions;
+  await plugin.mettreEnPause(true); await premier.termine;
+  assert.equal(connexions[0].options.signal.aborted, true);
+  assert.equal(plugin.fluxRevisions, null);
+  plugin.maintenirFlux(); assert.equal(connexions.length, 1);
+  await plugin.mettreEnPause(false); await new Promise(setImmediate);
+  assert.equal(connexions.length, 2);
+  const second = plugin.fluxRevisions;
+  plugin.moteur.api = async () => ({});
+  plugin.onunload(); await second.termine;
+  assert.equal(connexions[1].options.signal.aborted, true);
+});
+
+test('un flux refusé laisse le sondage requestUrl recevoir les changements', async () => {
+  let tentatives = 0;
+  const { plugin } = charger({ ...ETAT_TEST, derniereRev: 3 }, {
+    AbortController, setTimeout,
+    fetch: async () => { tentatives++; throw Error('CORS ou réseau indisponible'); },
+  });
+  await plugin.onload();
+  let synchronisations = 0;
+  plugin.lancer = async () => { synchronisations++; };
+  plugin.moteur.api = async () => ({ json: async () => ({ rev: 4 }) });
+  plugin.ecouter(); await plugin.fluxRevisions.termine;
+  await plugin.intervalle();
+  assert.equal(synchronisations, 1);
+  assert.equal(tentatives, 1, 'attendre avant de rouvrir un flux refusé');
+  plugin.onunload();
+});
+
+test('une réponse de sondage en retard ne relance rien après une pause ou un changement de coffre', async () => {
+  for (const changement of ['pause', 'coffre']) {
+    const { plugin } = charger({ ...ETAT_TEST, derniereRev: 3 }); await plugin.onload();
+    const reponse = Promise.withResolvers();
+    let synchronisations = 0;
+    plugin.lancer = async () => { synchronisations++; };
+    plugin.moteur.api = async () => ({ json: () => reponse.promise });
+    plugin.ecouter(); const sondage = plugin.intervalle();
+    if (changement === 'pause') await plugin.mettreEnPause(true);
+    else plugin.etat.coffreId = 'autre-coffre';
+    reponse.resolve({ rev: 4 }); await sondage;
+    assert.equal(synchronisations, 0);
+    plugin.moteur.api = async () => ({}); plugin.onunload();
+  }
+});
+
 test('la pause coupe les automatismes, autorise une synchro ponctuelle et persiste après reprise', async () => {
   const { plugin, rendu } = charger({ serveur: 'https://cordee.example', coffreId: 'test', jeton: 'test-token' });
   await plugin.onload();

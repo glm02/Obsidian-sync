@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.5
+
+- **Synchronisation plus rapide** : les fichiers enregistrés partent après 200 ms, sans attendre une pause dans la frappe. Les changements successifs ne repoussent plus le premier envoi.
+- **Réception en direct** : l’extension utilise le flux de notifications du serveur pour récupérer les nouvelles versions dès leur annonce. Le sondage via `requestUrl` reste actif si le flux est bloqué ou interrompu. Reconnexion automatique, arrêt en pause et au déchargement, reprise immédiate.
+- Les changements de même taille dont l’horodatage est identique sont détectés à chaque événement de fichier. Une modification pendant la lecture ne peut plus produire un envoi dont le contenu et l’empreinte diffèrent. Les dossiers exclus ne déclenchent pas d’envoi.
+
 ## 0.4.4
 
 - La récupération Moodle respecte les fichiers explicitement exclus dans son suivi local : ils ne sont plus retéléchargés ni réintroduits dans l’index du cours après un nettoyage du coffre.

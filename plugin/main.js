@@ -366,10 +366,14 @@ class Moteur {
       if (this.ignorer(f.chemin)) continue;
       presents.add(f.chemin);
       if (f.taille > this.tailleMax) { this.signaler('fichier-trop-gros', f.chemin); continue; }
-      const h = await this.hashFichier(f);
+      let h = await this.hashFichier(f);
       const base = this.etat.bases[f.chemin] || null;
       if (h === null || h === base) continue;
-      await this.envoyerBlob(h, await this.fichiers.lire(f.chemin));
+      const contenu = await this.fichiers.lire(f.chemin);
+      if (!contenu) continue; // supprimé pendant la lecture
+      h = await empreinte(contenu); // le fichier peut changer entre le premier hachage et l'envoi
+      if (h === base) continue;
+      await this.envoyerBlob(h, contenu);
       if ((await this.valider(f.chemin, h, base)) === 409) { refus++; continue; }
       this.etat.bases[f.chemin] = h;
     }
@@ -423,7 +427,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.4';
+const VERSION = '0.4.5';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -518,6 +522,49 @@ function httpObsidian({ methode, url, entetes, corps, type }) {
   return O.requestUrl({ url, method: methode, headers: entetes, body: corps, contentType: type, throw: false }).then((r) => ({
     statut: r.status, json: async () => r.json, octets: async () => r.arrayBuffer,
   }));
+}
+
+/** Notifications uniquement : les contenus continuent de passer par requestUrl. */
+async function ecouterRevisions({ url, jeton, signal, recevoir, ouvert = () => {}, requete = globalThis.fetch }) {
+  const controleur = new AbortController();
+  const arreter = () => controleur.abort();
+  signal.addEventListener('abort', arreter, { once: true });
+  let lecteur, minuteur;
+  const surveiller = (ms) => { clearTimeout(minuteur); minuteur = setTimeout(arreter, ms); };
+  try {
+    if (signal.aborted) return;
+    surveiller(10_000);
+    const reponse = await requete(url, {
+      headers: { Authorization: 'Bearer ' + jeton, Accept: 'text/event-stream' },
+      signal: controleur.signal, credentials: 'omit', redirect: 'error', cache: 'no-store', referrerPolicy: 'no-referrer',
+    });
+    if (!reponse.ok || !reponse.headers.get('content-type')?.includes('text/event-stream') || !reponse.body?.getReader) throw Error('Flux indisponible');
+    lecteur = reponse.body.getReader();
+    ouvert();
+    const decodeur = new TextDecoder();
+    let tampon = '';
+    for (;;) {
+      surveiller(60_000); // le serveur envoie un battement toutes les 25 s
+      const { value, done } = await lecteur.read();
+      if (done || signal.aborted) break;
+      tampon += decodeur.decode(value, { stream: true }).replace(/\r/g, '');
+      if (tampon.length > 64 * 1024) throw Error('Notification trop grande');
+      let fin;
+      while ((fin = tampon.indexOf('\n\n')) !== -1) {
+        const message = tampon.slice(0, fin); tampon = tampon.slice(fin + 2);
+        const donnees = message.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('\n');
+        if (!donnees) continue;
+        let rev;
+        try { rev = JSON.parse(donnees).rev; } catch { continue; }
+        if (Number.isSafeInteger(rev) && rev >= 0 && !signal.aborted) recevoir(rev);
+      }
+    }
+  } finally {
+    clearTimeout(minuteur);
+    signal.removeEventListener('abort', arreter);
+    controleur.abort();
+    await lecteur?.cancel().catch(() => {});
+  }
 }
 
 function fichiersObsidian(app) {
@@ -668,8 +715,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     });
 
     this.app.workspace.onLayoutReady(() => {
-      const plus_tard = (f) => { if (f?.path) this.moteur.fichiers.invaliderDossier(f.path); this.programmer(2000); };
-      for (const ev of ['create', 'modify', 'delete', 'rename']) this.registerEvent(this.app.vault.on(ev, plus_tard));
+      for (const ev of ['create', 'modify', 'delete', 'rename']) this.registerEvent(this.app.vault.on(ev, (f, ancien) => this.changementLocal(f, ancien)));
       // Les marques « à voir » suivent un fichier renommé et disparaissent avec un fichier supprimé.
       this.registerEvent(this.app.vault.on('rename', (f, ancien) => { if (this.etat.aVoir[ancien]) { this.etat.aVoir[f.path] = this.etat.aVoir[ancien]; delete this.etat.aVoir[ancien]; this.rafraichirMarques(); } }));
       this.registerEvent(this.app.vault.on('delete', (f) => { if (this.etat.aVoir[f?.path]) { delete this.etat.aVoir[f.path]; this.rafraichirMarques(); } }));
@@ -694,7 +740,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
 
   onunload() {
     if (this.connecte() && !this.presenceIndisponible) this.moteur.api('POST', `/api/coffres/${this.etat.coffreId}/presence`, { parti: true }).catch(() => {});
-    this.arret = true; clearTimeout(this.minuteur); clearTimeout(this.minuteurMarques); this.abonnesStatut.clear(); this.styleMarques?.remove?.(); }
+    this.arret = true; this.arreterFlux(); clearTimeout(this.minuteur); clearTimeout(this.minuteurMarques); this.abonnesStatut.clear(); this.styleMarques?.remove?.(); }
 
   /* ---------- Ce que les amis ont changé et que tu n'as pas encore vu ---------- */
 
@@ -843,7 +889,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     await this.moteur.fichiers.ecrire(chemin, contenu);
     if (this.etat.aVoir[chemin]) delete this.etat.aVoir[chemin];
     this.rafraichirMarques(0);
-    this.programmer(800);
+    this.programmer(200);
   }
 
   /* ---------- Calendrier ---------- */
@@ -1137,6 +1183,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     const avant = this.etat.enPause;
     this.etat.enPause = enPause;
     clearTimeout(this.minuteur);
+    this.echeanceSynchro = undefined;
     this.moteur.encore = false;
     try { await this.saveData(this.etat); }
     catch {
@@ -1145,14 +1192,30 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
       this.afficher();
       return;
     }
+    if (enPause) this.arreterFlux();
+    else { this.prochainFlux = 0; this.maintenirFlux(); }
     this.afficher();
     if (!enPause) await this.lancer();
   }
 
+  changementLocal(f, ancien) {
+    const chemins = [f?.path, typeof ancien === 'string' ? ancien : null].filter((p) => p && !this.moteur.ignorer(p));
+    if (!chemins.length) return;
+    for (const p of chemins) {
+      this.moteur.fichiers.invaliderDossier(p);
+      delete this.etat.cache[p]; // même taille et mtime arrondi : le contenu peut tout de même avoir changé
+    }
+    this.programmer(200);
+  }
+
   programmer(ms) {
     if (!this.connecte() || this.etat.enPause || this.arret) return;
+    const echeance = Date.now() + ms;
+    if (this.echeanceSynchro !== undefined && this.echeanceSynchro <= echeance) return;
     clearTimeout(this.minuteur);
-    this.minuteur = setTimeout(() => this.lancer(), ms);
+    this.echeanceSynchro = echeance;
+    // Une frappe continue ne repousse jamais l'envoi du premier changement.
+    this.minuteur = setTimeout(() => { this.echeanceSynchro = undefined; this.minuteur = null; return this.lancer(); }, ms);
   }
 
   async lancer({ forcer = false } = {}) {
@@ -1170,20 +1233,50 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     }
   }
 
-  // requestUrl fonctionne aussi sur mobile, sans dépendre d'un flux fetch/CORS.
+  arreterFlux() {
+    const flux = this.fluxRevisions;
+    this.fluxRevisions = null;
+    flux?.controleur.abort();
+  }
+
+  maintenirFlux() {
+    if (this.arret || !this.connecte() || this.etat.enPause) { this.arreterFlux(); return; }
+    const cle = JSON.stringify([this.etat.serveur, this.etat.coffreId, this.etat.jeton]);
+    if (this.fluxRevisions?.cle === cle) return;
+    if (this.fluxRevisions) this.arreterFlux();
+    if (typeof globalThis.fetch !== 'function' || typeof globalThis.AbortController !== 'function' || Date.now() < (this.prochainFlux || 0)) return;
+    const flux = { cle, controleur: new AbortController(), connecte: false };
+    this.fluxRevisions = flux;
+    flux.termine = ecouterRevisions({
+      url: this.moteur.url(this.moteur.racine() + '/evenements'), jeton: this.etat.jeton, signal: flux.controleur.signal,
+      ouvert: () => { if (this.fluxRevisions === flux) flux.connecte = true; },
+      recevoir: (rev) => { if (this.fluxRevisions === flux && rev > this.etat.derniereRev) this.programmer(0); },
+    }).catch(() => { /* requestUrl prend le relais si le flux est bloqué sur cet appareil. */ }).finally(() => {
+      if (this.fluxRevisions !== flux) return;
+      this.fluxRevisions = null;
+      this.prochainFlux = Date.now() + 10_000;
+    });
+  }
+
+  // Secours sans flux fetch/CORS, et actualisation de la présence, y compris sur mobile.
   ecouter() {
+    this.maintenirFlux();
     this.registerInterval(window.setInterval(async () => {
+      this.maintenirFlux();
       if (this.arret || !this.connecte() || this.etat.enPause || this.ecouteEnCours) return;
       this.ecouteEnCours = true;
+      const acces = [this.etat.serveur, this.etat.coffreId, this.etat.jeton];
+      const courant = () => !this.arret && this.connecte() && !this.etat.enPause && acces.every((v, i) => v === [this.etat.serveur, this.etat.coffreId, this.etat.jeton][i]);
       try {
         const info = await (await this.moteur.api('GET', `/api/coffres/${this.etat.coffreId}?revision=1`)).json();
+        if (!courant()) return;
         if (Array.isArray(info.presence)) this.majPresence(info.presence);
-        if (!this.arret && this.connecte() && info.rev > this.etat.derniereRev) await this.lancer();
-        else if (!this.arret && this.connecte() && !this.moteur.enCours) {
+        if (!this.arret && this.connecte() && !this.etat.enPause && info.rev > this.etat.derniereRev) await this.lancer();
+        else if (!this.arret && this.connecte() && !this.etat.enPause && !this.moteur.enCours) {
           if (this.sourceErreur === 'sondage') { this.derniereErreur = ''; this.phase = 'pret'; }
           this.afficher();
         }
-      } catch (erreur) { if (!this.arret && this.connecte() && this.sourceErreur !== 'synchro') this.signalerErreur(erreur, 'sondage'); }
+      } catch (erreur) { if (courant() && this.sourceErreur !== 'synchro') this.signalerErreur(erreur, 'sondage'); }
       finally { this.ecouteEnCours = false; }
     }, 2500));
   }
@@ -1194,6 +1287,8 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     if (r.statut >= 400) throw new Error((j && j.erreur) || `Erreur ${r.statut}`);
     Object.assign(this.etat, { serveur: serveur.replace(/\/$/, ''), coffreId: j.coffreId, nomCoffre: j.nom, jeton: j.jeton, prenom: corps.prenom, derniereRev: 0, bases: {}, cache: {}, dossiers: Object.create(null), enPause: false, derniereSynchro: null });
     await this.saveData(this.etat);
+    this.prochainFlux = 0;
+    this.maintenirFlux();
     this.memoriserPreferences();
     this.afficher('');
     await this.lancer();
@@ -1208,6 +1303,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   }
 
   async quitter() {
+    this.arreterFlux();
     try { await this.moteur.api('DELETE', `/api/coffres/${this.etat.coffreId}/membres/moi`); } catch (e) { /* hors ligne : on oublie quand même localement */ }
     Object.assign(this.etat, { coffreId: '', nomCoffre: '', jeton: '', derniereRev: 0, bases: {}, cache: {}, dossiers: Object.create(null), enPause: false, derniereSynchro: null });
     await this.saveData(this.etat);
@@ -3298,3 +3394,4 @@ module.exports.interne = { lireCalendriersPartages, modifierCalendriersPartages,
 Object.assign(module.exports.interne, { lireAsc, lireKicad, calculerExpressionGeii, calculerBlocGeii, notationIngenieurGeii, estTexte });
 Object.assign(module.exports.interne, { nomMoodle, dossierMoodle, siteMoodle, lienConnexionMoodle, jetonDepuisLienMoodle, fichiersMoodle, imageCoursMoodle, typeImageMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, get CoursMoodleModal() { return CoursMoodleModal; } });
 Object.assign(module.exports.interne, { markdownMoodle, devoirMoodle, noteAnnoncesMoodle, get NotesMoodleModal() { return NotesMoodleModal; } });
+Object.assign(module.exports.interne, { ecouterRevisions });

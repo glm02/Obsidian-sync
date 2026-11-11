@@ -24,10 +24,10 @@ Cordée garde les bonnes idées (fusion des notes ligne à ligne, copie de confl
 | Serveur auto-hébergé | Un seul processus Node 22, aucune dépendance, une base SQLite et un dossier de fichiers. Image Docker et Caddy pour le HTTPS. |
 | Coffres multiples | Un serveur héberge autant de coffres que voulu. Créer un coffre demande le code de création de l'hébergeur. |
 | Invitations | Lien `https://serveur/rejoindre/ABCD-EFGH-JKLM`, valable 7 jours, 5 personnes. Code lisible, sans 0/O ni 1/I. |
-| Synchro automatique | À chaque modification (après 2 s de calme), à l'ouverture, et toutes les 5 min par sécurité. |
+| Synchro automatique | Après 200 ms pour les fichiers enregistrés, sans repousser l’envoi en cas de frappe continue, à l'ouverture, et toutes les 5 min par sécurité. |
 | Pause/reprise | Les automatismes peuvent être suspendus, avec conservation du choix. La synchronisation manuelle reste disponible. |
 | État de la synchro | Dernière synchronisation réussie, fichiers partagés et erreurs utiles dans le panneau. |
-| Temps quasi réel | L’extension vérifie les révisions distantes toutes les 2,5 s via `requestUrl` ; le serveur propose aussi un flux d’événements. |
+| Temps quasi réel | Le flux d’événements du serveur déclenche immédiatement la récupération. Une vérification toutes les 2,5 s via `requestUrl` assure le secours et actualise la présence. Le flux se reconnecte et respecte la pause. |
 | Fusion des notes | `.md`, `.txt`, `.csv` modifiés des deux côtés : fusion à trois versions, ligne à ligne. Même ligne modifiée différemment : les deux versions sont gardées à la suite, avec une notification. |
 | Fichiers binaires | Image ou PDF modifié des deux côtés : la version de l'autre prend la place, la tienne est gardée en « (conflit Prénom date) ». |
 | Suppressions | Un fichier supprimé par un ami part dans la corbeille locale du coffre (`.trash`), donc récupérable. |

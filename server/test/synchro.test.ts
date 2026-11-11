@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import { demarrer, CODE } from './outils.ts';
 
 const require = createRequire(import.meta.url);
-const { Moteur, versBuffer, versTexte } = require('../../plugin/main.js').interne;
+const { Moteur, versBuffer, versTexte, empreinte, ecouterRevisions } = require('../../plugin/main.js').interne;
 
 // Coffre factice : un dictionnaire chemin → contenu.
 function coffreMemoire(initial: Record<string, string> = {}) {
@@ -56,6 +56,75 @@ function moteur(url: string, coffreId: string, jeton: string, prenom: string, c:
   });
   return { m, signaux };
 }
+
+test('le flux reçoit une note entre deux coffres sans attendre un sondage', { timeout: 8000 }, async (t) => {
+  const srv = await demarrer();
+  const controleur = new AbortController();
+  let flux: Promise<void> | undefined;
+  try {
+    const cree = (await srv.appel('POST', '/api/coffres', { nom: 'Test direct', prenom: 'Agent A', codeCreation: CODE })).json;
+    const code = (await srv.appel('POST', `/api/coffres/${cree.coffreId}/invitations`, {}, cree.jeton)).json.code;
+    const rejoint = (await srv.appel('POST', '/api/rejoindre', { code, prenom: 'Agent B' })).json;
+    const a = coffreMemoire(), b = coffreMemoire();
+    const A = moteur(srv.url, cree.coffreId, cree.jeton, 'Agent A', a).m;
+    const B = moteur(srv.url, cree.coffreId, rejoint.jeton, 'Agent B', b).m;
+    const abonne = Promise.withResolvers<void>();
+    const recu = Promise.withResolvers<void>();
+    flux = ecouterRevisions({
+      url: `${srv.url}/api/coffres/${cree.coffreId}/evenements`, jeton: rejoint.jeton, signal: controleur.signal,
+      recevoir: (rev: number) => {
+        if (rev === 0) abonne.resolve();
+        if (rev > B.etat.derniereRev) B.synchroniser().then(() => {
+          if (b.texte('test.md') === 'Modification instantanée') recu.resolve();
+        }).catch(recu.reject);
+      },
+    });
+    flux.catch(recu.reject);
+    await abonne.promise;
+    const debut = performance.now();
+    a.modifier('test.md', 'Modification instantanée');
+    await A.synchroniser(); await recu.promise;
+    assert.equal(b.texte('test.md'), 'Modification instantanée');
+    t.diagnostic(`Envoi et réception par notification : ${Math.round(performance.now() - debut)} ms sur serveur local.`);
+  } finally {
+    controleur.abort(); await flux?.catch(() => {});
+    await srv.arreter();
+  }
+});
+
+test('les notifications fragmentées, CRLF et JSON invalides sont traitées sans exposer le jeton', async () => {
+  const revisions: number[] = [];
+  const morceaux = ['data: {"re', 'v":1}\r', '\n\r\n: ping\r\n\r\ndata: faux\n\ndata: {"rev":-1}\n\n', 'data: {"rev":\n', 'data: 2}\n\ndata: {"rev":"3"}\n\n'];
+  await ecouterRevisions({
+    url: 'https://cordee.example/api/coffres/test/evenements', jeton: 'jeton-fictif', signal: new AbortController().signal,
+    recevoir: (rev: number) => revisions.push(rev),
+    requete: async (url: string, options: RequestInit) => {
+      assert.equal(url.includes('jeton-fictif'), false);
+      assert.equal((options.headers as Record<string, string>).Authorization, 'Bearer jeton-fictif');
+      assert.equal(options.redirect, 'error'); assert.equal(options.credentials, 'omit');
+      return new Response(new ReadableStream({ start(c) { for (const m of morceaux) c.enqueue(new TextEncoder().encode(m)); c.close(); } }), {
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    },
+  });
+  assert.deepEqual(revisions, [1, 2]);
+});
+
+test('un fichier modifié entre son hachage et son envoi garde une empreinte cohérente', async () => {
+  let lectures = 0;
+  const ancien = versBuffer('avant'), nouveau = versBuffer('apres');
+  const m = new Moteur({ etat: { bases: {}, cache: {} }, fichiers: {
+    lister: () => [{ chemin: 'note.md', taille: 5, mtime: 1 }],
+    lire: async () => ++lectures === 1 ? ancien : nouveau,
+  } });
+  let empreinteEnvoyee = '';
+  m.envoyerBlob = async (hash: string, contenu: ArrayBuffer) => {
+    assert.equal(hash, await empreinte(contenu)); assert.equal(versTexte(contenu), 'apres'); empreinteEnvoyee = hash;
+  };
+  m.valider = async (_: string, hash: string) => { assert.equal(hash, empreinteEnvoyee); return 200; };
+  await m.envoyer();
+  assert.equal(m.etat.bases['note.md'], await empreinte(nouveau));
+});
 
 test('deux amis synchronisent, fusionnent et suppriment', async () => {
   const srv = await demarrer();

@@ -35,7 +35,7 @@ Une invitation peut ensuite ouvrir `obsidian://cordee?serveur=…&code=…`. Le 
 
 ## Déclaration du réseau et des données
 
-Le serveur est choisi par l’utilisateur ; aucun serveur personnel du développeur n’est imposé dans le code. Après consentement explicite, l’extension synchronise notes, pièces jointes et chemins des fichiers. Elle envoie le prénom choisi et reçoit les changements des membres. Les dossiers exclus et les réglages Obsidian restent locaux. Les changements distants sont vérifiés toutes les 2,5 secondes avec `requestUrl`, compatible avec le transport réseau d’Obsidian. Le serveur conserve l’historique et peut lire les notes : HTTPS est requis pour le déploiement public, sans chiffrement de bout en bout en v0.1. Aucun traçage, paiement, compte externe ou publicité côté extension.
+Le serveur est choisi par l’utilisateur ; aucun serveur personnel du développeur n’est imposé dans le code. Après consentement explicite, l’extension synchronise notes, pièces jointes et chemins des fichiers. Elle envoie le prénom choisi et reçoit les changements des membres. Les dossiers exclus et les réglages Obsidian restent locaux. Le flux d’événements du serveur annonce les changements via `fetch`, avec jeton dans l’en-tête, sans cookie ni redirection. Le sondage toutes les 2,5 secondes avec `requestUrl` reste actif en secours et pour la présence ; les contenus passent toujours par le transport réseau d’Obsidian. Le serveur conserve l’historique et peut lire les notes : HTTPS est requis pour le déploiement public, sans chiffrement de bout en bout en v0.1. Aucun traçage, paiement, compte externe ou publicité côté extension.
 
 ## Contrôles et limites
 
