@@ -7,6 +7,10 @@ function charger(etat, navigateur = {}) {
   const rendu = { textes: [], boutons: new Map(), elements: [], champs: [], ouvertures: 0 };
   const container = (racine = true) => ({
     enfants: [],
+    style: {}, value: '', scrollTop: 0, scrollLeft: 0,
+    addClass(cls) { this.classes = [...(this.classes || []), cls]; },
+    appendChild(enfant) { this.enfants.push(enfant); return enfant; },
+    get ownerDocument() { return { createElementNS: (_, tag) => { const enfant = container(false); enfant.tag = tag; enfant.attrs = {}; rendu.elements.push(enfant); return enfant; } }; },
     empty() {
       const descendants = new Set();
       const ajouter = (node) => { descendants.add(node); node.enfants.forEach(ajouter); };
@@ -61,8 +65,114 @@ function charger(etat, navigateur = {}) {
   };
   const context = { require: () => obsidian, module: { exports: {} }, TextEncoder, TextDecoder, clearTimeout, URL, URLSearchParams, atob, window: { setInterval: callback => callback }, ...navigateur };
   vm.runInNewContext(readFileSync(new URL('../main.js', import.meta.url), 'utf8'), context);
-  return { plugin: new context.module.exports(), rendu, obsidian, interne: context.module.exports.interne };
+  return { plugin: new context.module.exports(), rendu, obsidian, interne: context.module.exports.interne, container };
 }
+
+// Banc TextFileView volontairement minimal : il exerce les branchements sans
+// remplacer la sauvegarde GEII par une écriture cachée dans les tests.
+function chargerGeii({ collision = '', sansVue = false, sansExtensions = false } = {}) {
+  const banc = charger({}), { plugin, obsidian, container } = banc;
+  const vues = new Map(), extensions = new Map(), blocs = new Map();
+  plugin.registerView = (id, creer) => vues.set(id, creer);
+  plugin.registerMarkdownCodeBlockProcessor = (nom, rendre) => blocs.set(nom, rendre);
+  if (!sansExtensions) plugin.registerExtensions = (liste, id) => {
+    assert.equal(liste.length, 1, 'une collision ne doit pas bloquer les autres extensions');
+    if (liste[0] === collision) throw Error('extension déjà prise');
+    extensions.set(liste[0], id);
+  };
+  if (!sansVue) obsidian.TextFileView = class {
+    constructor(leaf) { this.app = leaf.app; this.contentEl = container(); this.demandes = 0; this.requestSave = () => { this.demandes++; }; }
+    async save() { await this.app.vault.modify(this.file, this.getViewData()); }
+  };
+  return { ...banc, vues, extensions, blocs };
+}
+
+test('GEII : les API absentes et une extension déjà prise ne bloquent pas le chargement', async () => {
+  for (const options of [{ sansVue: true }, { sansExtensions: true }]) {
+    const banc = chargerGeii(options); await banc.plugin.onload();
+    assert.equal(banc.extensions.size, 0); assert.equal(banc.blocs.size, 2);
+    assert.equal(banc.plugin.phase, 'pret');
+  }
+  const banc = chargerGeii({ collision: 'c' }); await banc.plugin.onload();
+  assert.equal(banc.extensions.has('c'), false);
+  const vue = banc.vues.get('cordee-geii-code')({ app: banc.plugin.app });
+  assert.equal(vue.canAcceptExtension('c'), false); assert.equal(vue.canAcceptExtension('INO'), true);
+  for (const extension of ['ino', 'h', 'm', 'py', 'vhd', 'asm', 's', 'asc', 'kicad_sch']) assert.ok(banc.extensions.has(extension));
+  assert.equal(banc.extensions.has('kicad_pcb'), false);
+});
+
+test('GEII : le code affiche ses lignes, demande la sauvegarde normale et ouvre le logiciel après sauvegarde', async () => {
+  const { plugin, vues, rendu } = chargerGeii(); await plugin.onload();
+  const ordre = []; plugin.app.vault.modify = async (f, contenu) => ordre.push(['sauve', f.path, contenu]);
+  plugin.app.openWithDefaultApp = async chemin => ordre.push(['ouvre', chemin]);
+  const vue = vues.get('cordee-geii-code')({ app: plugin.app });
+  vue.file = { path: 'tp.ino', name: 'tp.ino' }; vue.setViewData('void setup() {}\nvoid loop() {}', true);
+  assert.equal(vue.getViewType(), 'cordee-geii-code'); assert.equal(vue.getDisplayText(), 'tp.ino');
+  assert.equal(vue.numerosGeii.textContent, '1\n2');
+  vue.champGeii.value = 'ligne 1\nligne 2\n'; vue.champGeii.oninput();
+  assert.equal(vue.demandes, 1); assert.equal(vue.numerosGeii.textContent, '1\n2\n3');
+  vue.champGeii.scrollTop = 24; vue.champGeii.onscroll(); assert.equal(vue.numerosGeii.scrollTop, 24);
+  await rendu.boutons.get('Ouvrir dans le logiciel')();
+  assert.deepEqual(ordre, [['sauve', 'tp.ino', 'ligne 1\nligne 2\n'], ['ouvre', 'tp.ino']]);
+  plugin.app.vault.modify = async () => { throw Error('Sauvegarde refusée'); };
+  await rendu.boutons.get('Ouvrir dans le logiciel')(); assert.equal(ordre.length, 2); assert.equal(rendu.notice, 'Sauvegarde refusée');
+  vue.clear(); assert.equal(vue.getViewData(), ''); assert.equal(vue.numerosGeii.textContent, '1');
+  delete plugin.app.openWithDefaultApp; await rendu.boutons.get('Ouvrir dans le logiciel')();
+  assert.match(rendu.notice, /pas disponible/);
+});
+
+test('GEII : LTspice dessine un SVG sûr, ajuste le zoom et ne sauvegarde jamais le schéma', async () => {
+  const { plugin, vues, rendu } = chargerGeii(); await plugin.onload();
+  plugin.app.vault.modify = () => assert.fail('Un aperçu ne doit jamais écrire');
+  let ouvert; plugin.app.openWithDefaultApp = async chemin => { ouvert = chemin; };
+  const source = readFileSync(new URL('./exemples/rc.asc', import.meta.url), 'utf8') + '\nTEXT -300 0 Left 2 ;<script>alert(1)</script>';
+  const vue = vues.get('cordee-geii-ltspice')({ app: plugin.app }); vue.file = { path: 'rc.asc' };
+  vue.setViewData(source, true); assert.equal(vue.getViewData(), source);
+  assert.equal(rendu.elements.filter(e => e.tag === 'rect').length, 2);
+  assert.equal(rendu.elements.filter(e => e.tag === 'line').length, 4);
+  assert.ok(rendu.elements.some(e => e.tag === 'path'));
+  assert.ok(rendu.elements.some(e => e.tag === 'text' && e.textContent === 'R1 4.7k'));
+  assert.ok(rendu.elements.some(e => e.tag === 'text' && e.textContent === '<script>alert(1)</script>'));
+  assert.equal(rendu.elements.some(e => e.tag === 'script' || e.tag === 'textarea'), false);
+  const svg = rendu.elements.find(e => e.tag === 'svg');
+  assert.match(svg.attrs.attr.viewBox, /^-324 /); assert.equal(svg.style.width, '100%');
+  rendu.boutons.get('Agrandir')(); assert.equal(svg.style.width, '125%');
+  rendu.boutons.get('Ajuster à la largeur')(); assert.equal(svg.style.width, '100%');
+  rendu.boutons.get('Réduire')(); assert.equal(svg.style.width, '80%');
+  await vue.save(); await rendu.boutons.get('Ouvrir dans LTspice')(); assert.equal(ouvert, 'rc.asc');
+  vue.setViewData('Version 4\nSHEET 1 1 1', true); assert.ok(rendu.textes.includes('Aucun élément LTspice reconnu.'));
+});
+
+test('GEII : KiCad affiche composants et feuilles, sans éditeur ni écriture à la fermeture', async () => {
+  const { plugin, vues, rendu } = chargerGeii(); await plugin.onload();
+  plugin.app.vault.modify = () => assert.fail('Un aperçu ne doit jamais écrire');
+  let ouvert; plugin.app.openWithDefaultApp = async chemin => { ouvert = chemin; };
+  const source = readFileSync(new URL('./exemples/rc.kicad_sch', import.meta.url), 'utf8');
+  const vue = vues.get('cordee-geii-kicad')({ app: plugin.app }); vue.file = { path: 'rc.kicad_sch' }; vue.setViewData(source, true);
+  for (const texte of ['R1', '4.7k', 'C1', '10uF', 'Resistor_SMD:R_0805_2012Metric', 'Alimentation (5 V)', 'alimentation.kicad_sch']) assert.ok(rendu.textes.includes(texte), texte);
+  assert.equal(rendu.elements.some(e => e.tag === 'textarea'), false); assert.equal(vue.getViewData(), source);
+  await vue.save(); await rendu.boutons.get('Ouvrir dans KiCad')(); assert.equal(ouvert, 'rc.kicad_sch');
+  vue.setViewData('(kicad_sch', true); assert.ok(rendu.textes.some(t => /parenthèse fermante/.test(t)));
+  vue.clear(); assert.equal(vue.getViewData(), '');
+});
+
+test('GEII : les blocs calc et ltspice rendent résultats, erreurs, contenu brut et liens relatifs', async () => {
+  const { plugin, blocs, container, rendu } = chargerGeii({ sansVue: true }); await plugin.onload();
+  blocs.get('calc')('R = 4.7kΩ\nC = 10uF\ntau = R*C\nerr = R+C\nsuivant = 2', container());
+  for (const texte of ['4,7 kΩ', '10 µF', '47 ms', '2']) assert.ok(rendu.textes.includes(texte));
+  assert.ok(rendu.textes.some(t => /Erreur : Unités incompatibles/.test(t)));
+  const source = readFileSync(new URL('./exemples/rc.asc', import.meta.url), 'utf8');
+  const ctx = { sourcePath: 'TP/note.md' }, fichier = { path: 'TP/rc.asc', extension: 'asc' };
+  plugin.app.metadataCache = { getFirstLinkpathDest(chemin, depuis) { assert.equal(chemin, 'rc.asc'); assert.equal(depuis, ctx.sourcePath); return fichier; } };
+  plugin.app.vault.read = async f => { assert.equal(f, fichier); return source; };
+  await blocs.get('ltspice')('[[rc.asc]]', container(), ctx);
+  assert.ok(rendu.elements.some(e => e.tag === 'text' && e.textContent === 'C1 10u'));
+  await blocs.get('ltspice')(source, container(), ctx);
+  assert.equal(rendu.elements.filter(e => e.tag === 'svg').length, 2);
+  plugin.app.metadataCache.getFirstLinkpathDest = () => null;
+  await blocs.get('ltspice')('[[absent.asc]]', container(), ctx);
+  assert.ok(rendu.textes.some(t => /Fichier .asc introuvable/.test(t)));
+});
 
 test('le logo ouvre le partage connecté et conserve le formulaire après déconnexion', async () => {
   const { plugin, rendu } = charger({ serveur: 'https://cordee.example', coffreId: 'test', jeton: 'test-token', nomCoffre: 'Notre coffre' });

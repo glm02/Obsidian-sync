@@ -627,6 +627,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.barre.addClass?.('mod-clickable');
     this.barre.onClickEvent?.(() => this.ouvrirPanneau());
     this.presence = [];
+    enregistrerGeii(this);
     if (O.ItemView && this.registerView) { this.registerView(VUE_CORDEE, (leaf) => new VuePanneau(leaf, this)); this.registerView(VUE_SEMAINE, (leaf) => new VueSemaine(leaf, this)); }
     this.moteur = this.creerMoteur();
     this.afficher('');
@@ -2148,6 +2149,300 @@ if (O) {
   };
 }
 
+/* ---------- Logiciels GEII ---------- */
+
+// Ces lecteurs ne changent pas EXT_TEXTE : une fusion pourrait casser les
+// connexions d'un schéma. En conflit, les fichiers GEII restent copiés en entier.
+function lireAsc(source) {
+  const schema = { fils: [], noeuds: [], symboles: [], textes: [] };
+  let symbole = null;
+  for (const ligne of source.split(/\r?\n/)) {
+    let m;
+    const coord = valeurs => valeurs.every(v => Number.isFinite(+v) && Math.abs(+v) <= 1e7);
+    if ((m = /^WIRE\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s+(-?\d+)\s*$/.exec(ligne)) && coord(m.slice(1))) schema.fils.push(m.slice(1).map(Number));
+    else if ((m = /^FLAG\s+(-?\d+)\s+(-?\d+)\s+(.+)$/.exec(ligne)) && coord(m.slice(1, 3))) schema.noeuds.push({ x: +m[1], y: +m[2], nom: m[3] });
+    else if ((m = /^SYMBOL\s+(\S+)\s+(-?\d+)\s+(-?\d+)(?:\s+(\S+))?/.exec(ligne)) && coord(m.slice(2, 4))) {
+      symbole = { type: m[1], x: +m[2], y: +m[3], orientation: m[4] || 'R0', nom: '', valeur: '' }; schema.symboles.push(symbole);
+    } else if ((m = /^SYMATTR\s+(InstName|Value)\s+(.+)$/.exec(ligne)) && symbole) symbole[m[1] === 'InstName' ? 'nom' : 'valeur'] = m[2];
+    else if ((m = /^TEXT\s+(-?\d+)\s+(-?\d+)\s+\S+\s+\d+\s+([\s\S]*)$/.exec(ligne)) && coord(m.slice(1, 3))) schema.textes.push({ x: +m[1], y: +m[2], texte: m[3].replace(/^[!;]/, '').replace(/\\n/g, '\n') });
+  }
+  return schema;
+}
+
+// Les propriétés KiCad imbriquent des listes et des chaînes échappées : lire
+// les parenthèses évite de confondre les définitions avec les symboles placés.
+function lireKicad(source) {
+  let i = 0, nombre = 0;
+  function espace() { while (i < source.length && /\s/.test(source[i])) i++; }
+  function lire(profondeur = 0) {
+    if (profondeur > 100 || ++nombre > 500000) throw Error('Schéma trop complexe pour cet aperçu.');
+    espace();
+    if (source[i] === '(') {
+      i++; const liste = []; espace();
+      while (i < source.length && source[i] !== ')') { liste.push(lire(profondeur + 1)); espace(); }
+      if (source[i++] !== ')') throw Error('Schéma incomplet : parenthèse fermante manquante.');
+      return liste;
+    }
+    if (source[i] === '"') {
+      i++; let valeur = '';
+      while (i < source.length) {
+        const c = source[i++]; if (c === '"') return valeur;
+        if (c === '\\') { const e = source[i++]; if (e === undefined) break; valeur += ({ n: '\n', r: '\r', t: '\t' })[e] || e; }
+        else valeur += c;
+      }
+      throw Error('Schéma incomplet : guillemet fermant manquant.');
+    }
+    const debut = i; while (i < source.length && !/[\s()]/.test(source[i])) i++;
+    if (i === debut) throw Error('Schéma invalide.');
+    return source.slice(debut, i);
+  }
+  const racine = lire(); espace();
+  if (i !== source.length || !Array.isArray(racine) || racine[0] !== 'kicad_sch') throw Error('Ce fichier n’est pas un schéma KiCad moderne.');
+  const proprietes = liste => new Map(liste.filter(e => Array.isArray(e) && e[0] === 'property').map(e => [e[1], e[2] || '']));
+  const composants = [], feuilles = [];
+  for (const element of racine) if (Array.isArray(element)) {
+    const p = proprietes(element);
+    if (element[0] === 'symbol') composants.push({ reference: p.get('Reference') || '—', valeur: p.get('Value') || '', empreinte: p.get('Footprint') || '' });
+    if (element[0] === 'sheet') feuilles.push({ nom: p.get('Sheetname') || p.get('Sheet name') || 'Sans nom', fichier: p.get('Sheetfile') || p.get('Sheet file') || '' });
+  }
+  return { composants, feuilles };
+}
+
+const PREFIXES_GEII = { p: 1e-12, n: 1e-9, 'µ': 1e-6, 'μ': 1e-6, u: 1e-6, m: 1e-3, k: 1e3, M: 1e6, G: 1e9 };
+// Dimensions dans la base Ω, s, A : F = s/Ω et V = Ω·A.
+const UNITES_GEII = { 'Ω': [1, 0, 0], ohm: [1, 0, 0], F: [-1, 1, 0], s: [0, 1, 0], Hz: [0, -1, 0], A: [0, 0, 1], V: [1, 0, 1], H: [1, 1, 0], W: [1, 0, 2] };
+const quantiteGeii = (valeur, dimension = [0, 0, 0]) => ({ valeur, dimension });
+const memeDimensionGeii = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 1e-10);
+function uniteGeii(nom) {
+  if (Object.hasOwn(UNITES_GEII, nom)) return quantiteGeii(1, UNITES_GEII[nom]);
+  if (Object.hasOwn(PREFIXES_GEII, nom[0])) {
+    const reste = nom.slice(1);
+    if (!reste || Object.hasOwn(UNITES_GEII, reste)) return quantiteGeii(PREFIXES_GEII[nom[0]], UNITES_GEII[reste] || [0, 0, 0]);
+  }
+  return null;
+}
+
+function calculerExpressionGeii(source, variables = new Map()) {
+  if (source.length > 2000) throw Error('Expression trop longue (2 000 caractères maximum).');
+  let i = 0, token, profondeur = 0;
+  const erreur = texte => { throw Error(`${texte} (colonne ${i + 1}).`); };
+  function avancer() {
+    while (i < source.length && /\s/.test(source[i])) i++;
+    if (i === source.length) { token = { type: 'fin' }; return; }
+    const reste = source.slice(i), n = /^(?:\d+(?:[.,]\d*)?|[.,]\d+)(?:[eE][+-]?\d+)?/.exec(reste);
+    if (n) { i += n[0].length; token = { type: 'nombre', valeur: +n[0].replace(',', '.') }; return; }
+    const nom = /^[A-Za-z_µμΩ][A-Za-z0-9_µμΩ]*/.exec(reste);
+    if (nom) { i += nom[0].length; token = { type: 'nom', valeur: nom[0] }; return; }
+    if ('+-*/^()'.includes(source[i])) { token = { type: source[i++] }; return; }
+    erreur('Caractère interdit');
+  }
+  function verifier(q) { if (!Number.isFinite(q.valeur) || !q.dimension.every(Number.isFinite)) erreur('Résultat non fini ou hors domaine'); return q; }
+  function entrer(action) { if (++profondeur > 80) erreur('Expression trop imbriquée'); const r = action(); profondeur--; return r; }
+  function primaire() {
+    if (token.type === 'nombre') {
+      let q = quantiteGeii(token.valeur); avancer();
+      if (token.type === 'nom') { const u = uniteGeii(token.valeur); if (u) { q = quantiteGeii(q.valeur * u.valeur, u.dimension); avancer(); } }
+      return verifier(q);
+    }
+    if (token.type === '(') { avancer(); const q = entrer(somme); if (token.type !== ')') erreur('Parenthèse fermante attendue'); avancer(); return q; }
+    if (token.type === 'nom') {
+      const nom = token.valeur; avancer();
+      if (['sqrt', 'log10', 'ln', 'exp'].includes(nom)) {
+        if (token.type !== '(') erreur(`Ajoute des parenthèses après ${nom}`);
+        avancer(); const q = entrer(somme);
+        if (token.type !== ')') erreur('Parenthèse fermante attendue'); avancer();
+        if (nom === 'sqrt') return verifier(quantiteGeii(Math.sqrt(q.valeur), q.dimension.map(v => v / 2)));
+        if (!memeDimensionGeii(q.dimension, [0, 0, 0])) erreur(`${nom} attend une valeur sans unité`);
+        return verifier(quantiteGeii(({ log10: Math.log10, ln: Math.log, exp: Math.exp })[nom](q.valeur)));
+      }
+      if (nom === 'pi') return quantiteGeii(Math.PI);
+      if (variables.has(nom)) return variables.get(nom);
+      const u = uniteGeii(nom); if (u) return u;
+      erreur(`Variable inconnue : ${nom}`);
+    }
+    erreur('Nombre, variable ou parenthèse attendu');
+  }
+  function puissance() {
+    let a = primaire();
+    if (token.type === '^') {
+      avancer(); const b = entrer(unaire);
+      if (!memeDimensionGeii(b.dimension, [0, 0, 0])) erreur('La puissance doit être sans unité');
+      a = verifier(quantiteGeii(a.valeur ** b.valeur, a.dimension.map(v => v * b.valeur)));
+    }
+    return a;
+  }
+  function unaire() { if (token.type === '+' || token.type === '-') { const signe = token.type; avancer(); const q = entrer(unaire); return quantiteGeii(signe === '-' ? -q.valeur : q.valeur, q.dimension); } return puissance(); }
+  function produit() {
+    let a = unaire();
+    while (token.type === '*' || token.type === '/') { const op = token.type; avancer(); const b = unaire(); a = verifier(quantiteGeii(op === '*' ? a.valeur * b.valeur : a.valeur / b.valeur, a.dimension.map((v, j) => v + (op === '*' ? 1 : -1) * b.dimension[j]))); }
+    return a;
+  }
+  function somme() {
+    let a = produit();
+    while (token.type === '+' || token.type === '-') {
+      const op = token.type; avancer(); const b = produit();
+      if (!memeDimensionGeii(a.dimension, b.dimension)) erreur('Unités incompatibles pour cette addition ou soustraction');
+      a = verifier(quantiteGeii(op === '+' ? a.valeur + b.valeur : a.valeur - b.valeur, a.dimension));
+    }
+    return a;
+  }
+  avancer(); const resultat = somme(); if (token.type !== 'fin') erreur('Opérateur attendu'); return verifier(resultat);
+}
+
+function notationIngenieurGeii(q) {
+  if (typeof q === 'number') q = quantiteGeii(q);
+  const unite = Object.entries(UNITES_GEII).find(([nom, dim]) => nom !== 'ohm' && memeDimensionGeii(dim, q.dimension))?.[0];
+  const dimension = unite || (memeDimensionGeii(q.dimension, [0, 0, 0]) ? '' : ['Ω', 's', 'A'].map((nom, i) => q.dimension[i] ? `${nom}${q.dimension[i] === 1 ? '' : '^' + q.dimension[i]}` : '').filter(Boolean).join('·'));
+  let exposant = q.valeur ? Math.floor(Math.log10(Math.abs(q.valeur)) / 3) * 3 : 0;
+  if (exposant < -12 || exposant > 9) return `${q.valeur.toExponential(3).replace('.', ',')}${dimension ? ' ' + dimension : ''}`;
+  let valeur = +(q.valeur / 10 ** exposant).toPrecision(4);
+  if (Math.abs(valeur) >= 1000 && exposant < 9) { valeur /= 1000; exposant += 3; }
+  const prefixe = ({ '-12': 'p', '-9': 'n', '-6': 'µ', '-3': 'm', 0: '', 3: 'k', 6: 'M', 9: 'G' })[exposant];
+  // Un préfixe sur une unité composée serait ambigu : écrire alors ×10^n.
+  const suffixe = unite || !dimension ? prefixe + dimension : `${exposant ? '×10^' + exposant + ' ' : ''}${dimension}`;
+  return `${String(valeur).replace('.', ',')}${suffixe ? ' ' + suffixe : ''}`;
+}
+
+function calculerBlocGeii(source) {
+  const variables = new Map(), lignes = [];
+  for (const [i, ligne] of source.split(/\r?\n/).entries()) {
+    if (!ligne.trim()) continue;
+    if (i >= 1000) { lignes.push({ ligne: i + 1, nom: '', erreur: 'Limite de 1 000 lignes atteinte.' }); break; }
+    const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(ligne);
+    try {
+      if (!m) throw Error('Écris nom = expression.');
+      if (['pi', 'sqrt', 'log10', 'ln', 'exp'].includes(m[1]) || uniteGeii(m[1])) throw Error('Ce nom est réservé à une constante, une fonction ou une unité.');
+      const q = calculerExpressionGeii(m[2], variables); variables.set(m[1], q);
+      lignes.push({ ligne: i + 1, nom: m[1], ...q, resultat: notationIngenieurGeii(q) });
+    } catch (e) { if (m) variables.delete(m[1]); lignes.push({ ligne: i + 1, nom: m?.[1] || '', erreur: e.message }); }
+  }
+  return lignes;
+}
+
+function tableauGeii(c, titres, lignes) {
+  const table = c.createEl('div', { cls: 'cordee-geii-tableau' }).createEl('table');
+  const entete = table.createEl('thead').createEl('tr'); titres.forEach(t => entete.createEl('th', { text: t, attr: { scope: 'col' } }));
+  const corps = table.createEl('tbody');
+  for (const ligne of lignes) { const tr = corps.createEl('tr'); ligne.forEach(t => tr.createEl('td', { text: String(t) })); }
+}
+
+function afficherAscGeii(c, source) {
+  const schema = lireAsc(source), commandes = c.createEl('div', { cls: 'cordee-geii-commandes' });
+  c.createEl('p', { cls: 'cordee-geii-aide', text: 'Aperçu simplifié en lecture seule : les rectangles représentent les composants, sans leurs broches exactes. Ouvre LTspice pour vérifier les connexions.' });
+  const zone = c.createEl('div', { cls: 'cordee-geii-schema' });
+  const creer = (tag, attrs = {}, texte) => {
+    const el = zone.ownerDocument.createElementNS('http://www.w3.org/2000/svg', tag);
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, String(v)));
+    if (texte !== undefined) el.textContent = texte;
+    return el;
+  };
+  const svg = creer('svg', { role: 'img', 'aria-label': 'Schéma LTspice simplifié', preserveAspectRatio: 'xMinYMin meet' }); zone.appendChild(svg);
+  const points = [], point = (x, y) => points.push([x, y]);
+  const texte = (x, y, t) => { svg.appendChild(creer('text', { x, y, 'font-size': 14 }, t)); point(x, y - 16); point(x + Math.min(t.length, 300) * 9, y + 5); };
+  for (const [x1, y1, x2, y2] of schema.fils) { svg.appendChild(creer('line', { x1, y1, x2, y2 })); point(x1, y1); point(x2, y2); }
+  for (const n of schema.noeuds) {
+    point(n.x - 12, n.y); point(n.x + 12, n.y + 24);
+    if (n.nom === '0') svg.appendChild(creer('path', { d: `M${n.x} ${n.y}v8m-12 0h24m-19 5h14m-10 5h6` }));
+    else { svg.appendChild(creer('circle', { cx: n.x, cy: n.y, r: 3 })); texte(n.x + 6, n.y - 8, n.nom); }
+  }
+  for (const s of schema.symboles) {
+    const label = [s.nom || s.type, s.valeur].filter(Boolean).join(' '), largeur = Math.max(80, Math.min(label.length, 300) * 9 + 16);
+    svg.appendChild(creer('rect', { x: s.x, y: s.y, width: largeur, height: 40, rx: 4 }));
+    texte(s.x + 8, s.y + 25, label); point(s.x, s.y); point(s.x + largeur, s.y + 40);
+  }
+  for (const t of schema.textes) t.texte.split('\n').forEach((ligne, j) => texte(t.x, t.y + j * 18, ligne));
+  if (!points.length) { c.createEl('p', { text: 'Aucun élément LTspice reconnu.' }); point(0, 0); point(200, 80); }
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const [x, y] of points) { minX = Math.min(minX, x); minY = Math.min(minY, y); maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); }
+  svg.setAttribute('viewBox', `${minX - 24} ${minY - 24} ${Math.max(80, maxX - minX + 48)} ${Math.max(80, maxY - minY + 48)}`);
+  let zoom = 1;
+  const ajuster = () => { svg.style.width = `${zoom * 100}%`; svg.style.height = 'auto'; };
+  boutonCordee(commandes, 'Réduire', () => { zoom = Math.max(0.25, zoom / 1.25); ajuster(); }, { cls: 'cordee-bouton-discret' });
+  boutonCordee(commandes, 'Agrandir', () => { zoom = Math.min(8, zoom * 1.25); ajuster(); }, { cls: 'cordee-bouton-discret' });
+  boutonCordee(commandes, 'Ajuster à la largeur', () => { zoom = 1; ajuster(); }, { cls: 'cordee-bouton-discret' }); ajuster();
+}
+
+function afficherKicadGeii(c, source) {
+  try {
+    const { composants, feuilles } = lireKicad(source);
+    c.createEl('p', { cls: 'cordee-geii-aide', text: 'Lecture seule : composants et feuilles de ce fichier. Les sous-feuilles restent dans leurs propres fichiers ; ouvre KiCad pour voir le schéma.' });
+    tableauGeii(c, ['Référence', 'Valeur', 'Empreinte'], composants.map(s => [s.reference, s.valeur, s.empreinte || '—']));
+    if (!composants.length) c.createEl('p', { text: 'Aucun composant placé dans cette feuille.' });
+    c.createEl('h3', { text: 'Feuilles' });
+    if (feuilles.length) tableauGeii(c, ['Nom', 'Fichier'], feuilles.map(f => [f.nom, f.fichier]));
+    else c.createEl('p', { text: 'Aucune sous-feuille.' });
+  } catch (e) { c.createEl('p', { text: e.message, attr: { role: 'status' } }); }
+}
+
+function enregistrerGeii(plugin) {
+  if (plugin.registerMarkdownCodeBlockProcessor) {
+    plugin.registerMarkdownCodeBlockProcessor('calc', (source, el) => {
+      tableauGeii(el, ['Ligne', 'Nom', 'Résultat'], calculerBlocGeii(source).map(l => [l.ligne, l.nom, l.erreur ? 'Erreur : ' + l.erreur : l.resultat]));
+    });
+    plugin.registerMarkdownCodeBlockProcessor('ltspice', async (source, el, ctx) => {
+      try {
+        const lien = /^\s*\[\[([^\]\n]+)\]\]\s*$/.exec(source);
+        if (lien) {
+          const chemin = lien[1].split('|')[0];
+          const fichier = plugin.app.metadataCache?.getFirstLinkpathDest(chemin, ctx.sourcePath);
+          if (!fichier || fichier.extension?.toLowerCase() !== 'asc') throw Error('Fichier .asc introuvable : vérifie le chemin dans [[…]].');
+          source = await plugin.app.vault.read(fichier);
+        }
+        afficherAscGeii(el, source);
+      } catch (e) { el.createEl('p', { text: e.message, attr: { role: 'status' } }); }
+    });
+  }
+  if (!O?.TextFileView || !plugin.registerView || !plugin.registerExtensions) return;
+  for (const [type, extensions, logiciel] of [
+    ['code', ['ino', 'c', 'h', 'm', 'py', 'vhd', 'asm', 's'], 'le logiciel'],
+    ['ltspice', ['asc'], 'LTspice'], ['kicad', ['kicad_sch'], 'KiCad'],
+  ]) {
+    const id = 'cordee-geii-' + type;
+    const acceptees = new Set();
+    class VueGeii extends O.TextFileView {
+      constructor(leaf) {
+        super(leaf); this.texteGeii = ''; this.contentEl.empty(); this.contentEl.addClass('cordee-geii-vue');
+        const barre = this.contentEl.createEl('div', { cls: 'cordee-geii-commandes' });
+        boutonCordee(barre, 'Ouvrir dans ' + logiciel, async () => {
+          try {
+            if (!this.file || typeof this.app.openWithDefaultApp !== 'function') throw Error('L’ouverture externe n’est pas disponible sur cet appareil.');
+            if (type === 'code') await this.save();
+            await this.app.openWithDefaultApp(this.file.path);
+          } catch (e) { new O.Notice(e.message || 'Impossible d’ouvrir ce fichier dans le logiciel.'); }
+        }, { cls: 'cordee-bouton-discret' });
+        this.zoneGeii = this.contentEl.createEl('div', { cls: 'cordee-geii-contenu' });
+        if (type === 'code') {
+          const editeur = this.zoneGeii.createEl('div', { cls: 'cordee-geii-editeur' });
+          this.numerosGeii = editeur.createEl('pre', { cls: 'cordee-geii-numeros', attr: { 'aria-hidden': 'true' } });
+          this.champGeii = editeur.createEl('textarea', { cls: 'cordee-geii-code', attr: { 'aria-label': 'Code source', wrap: 'off', spellcheck: 'false', autocapitalize: 'off', autocomplete: 'off', autocorrect: 'off' } });
+          this.champGeii.oninput = () => { this.actualiserNumeros(); this.requestSave(); };
+          this.champGeii.onscroll = () => { this.numerosGeii.scrollTop = this.champGeii.scrollTop; };
+        }
+      }
+      getViewType() { return id; }
+      canAcceptExtension(extension) { return acceptees.has(extension.toLowerCase()); }
+      getDisplayText() { return this.file?.name || (type === 'code' ? 'Code GEII' : logiciel); }
+      getViewData() { return this.champGeii ? this.champGeii.value : this.texteGeii; }
+      setViewData(data, clear) {
+        this.texteGeii = data;
+        if (this.champGeii) { this.champGeii.value = data; this.actualiserNumeros(); if (clear) this.champGeii.scrollTop = this.champGeii.scrollLeft = 0; }
+        else { this.zoneGeii.empty(); (type === 'ltspice' ? afficherAscGeii : afficherKicadGeii)(this.zoneGeii, data); }
+      }
+      actualiserNumeros() { this.numerosGeii.setText(Array.from({ length: this.champGeii.value.split('\n').length }, (_, i) => i + 1).join('\n')); this.numerosGeii.scrollTop = this.champGeii.scrollTop; }
+      clear() { this.texteGeii = ''; if (this.champGeii) { this.champGeii.value = ''; this.actualiserNumeros(); } else this.zoneGeii.empty(); }
+      // TextFileView sauvegarde aussi à la fermeture. Un aperçu ne doit jamais
+      // écraser les changements que LTspice ou KiCad viennent d'enregistrer.
+      async save(clear) { if (type === 'code') return super.save(clear); }
+    }
+    plugin.registerView(id, leaf => new VueGeii(leaf));
+    for (const extension of extensions) {
+      try { plugin.registerExtensions([extension], id); acceptees.add(extension); }
+      catch { /* Une extension déjà prise reste gérée par son module actuel. */ }
+    }
+  }
+}
+
 module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
 module.exports.interne = { get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
+Object.assign(module.exports.interne, { lireAsc, lireKicad, calculerExpressionGeii, calculerBlocGeii, notationIngenieurGeii, estTexte });
