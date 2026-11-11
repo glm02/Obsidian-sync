@@ -243,3 +243,10 @@ button.cordee-evenement-ligne:not(.clickable-icon):hover { background-color: var
   .cordee-etiquette { display: none; } /* sur petit écran l'étiquette gênerait la lecture : le surlignage suffit */
 }
 @media (prefers-reduced-motion: reduce) { .cordee-bouton, .cordee-fichier, .cordee-collegue { transition: none; } }
+
+/* ---------- Moodle ---------- */
+.cordee-moodle { margin-bottom: var(--size-4-6); }
+.cordee-moodle-cours { border-top: 1px solid var(--background-modifier-border); padding: var(--size-4-3) 0; }
+.cordee-moodle-cours > label { display: flex; align-items: center; gap: var(--size-4-2); color: var(--text-normal); }
+.cordee-moodle-cours input[type="checkbox"] { margin: 0; }
+/* ---------- Fin Moodle ---------- */

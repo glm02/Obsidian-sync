@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
+import { webcrypto } from 'node:crypto';
 
 function charger(etat, navigateur = {}) {
   const rendu = { textes: [], boutons: new Map(), elements: [], champs: [], ouvertures: 0 };
@@ -44,7 +45,7 @@ function charger(etat, navigateur = {}) {
       setName(nom) { this.nom = nom; return this; }
       setDesc() { return this; }
       addText(callback) {
-        const champ = { inputEl: {}, setValue(v) { this.value = v; return this; }, setPlaceholder() { return this; }, onChange(action) { this.change = action; return this; } };
+        const champ = { inputEl: {}, setValue(v) { this.value = v; this.inputEl.value = v; return this; }, setPlaceholder() { return this; }, onChange(action) { this.change = action; return this; } };
         callback(champ); rendu.champs.push({ nom: this.nom, champ }); return this;
       }
       addButton(callback) {
@@ -782,4 +783,234 @@ test('la semaine : cours avec horaires, devoir « à rendre », liste par jour ;
   assert.ok(rendu.textes.includes('À rendre 23:59 · Rendu TP2'), 'le devoir est dans la ligne « Journée » de la grille');
   assert.ok(rendu.textes.includes('À rendre 23:59'), 'et dans la liste par jour');
   assert.ok(rendu.textes.includes('Rien de prévu.'));
+});
+
+test('Moodle : les réglages obtiennent un jeton et effacent le mot de passe sans le sauvegarder', async () => {
+  const { plugin, rendu, obsidian } = charger({});
+  const appels = [];
+  obsidian.requestUrl = async (r) => {
+    appels.push(r);
+    const param = new URLSearchParams(r.body);
+    if (r.url.endsWith('/login/token.php')) {
+      assert.equal(param.get('service'), 'moodle_mobile_app');
+      assert.equal(param.get('username'), 'agent-local');
+      assert.equal(param.get('password'), 'mot-de-passe-factice');
+      return { status: 200, json: { token: 'jeton-moodle-factice' } };
+    }
+    assert.equal(param.get('wstoken'), 'jeton-moodle-factice');
+    return { status: 200, json: param.get('wsfunction') === 'core_webservice_get_site_info' ? { userid: 42, firstname: 'Étudiant test' } : [{ id: 3, shortname: 'ENER3' }] };
+  };
+  await plugin.onload(); plugin.onglet.display();
+  assert.ok(rendu.textes.includes('Moodle'));
+  const champ = (nom) => rendu.champs.find((c) => c.nom === nom).champ;
+  champ('Adresse du site Moodle').change('https://moodle.exemple.fr/campus');
+  champ('Identifiant Moodle').change('agent-local');
+  const passe = champ('Mot de passe Moodle'); passe.inputEl.value = 'mot-de-passe-factice';
+  await rendu.boutons.get('Tester')();
+  assert.equal(passe.inputEl.value, '');
+  assert.ok(rendu.textes.includes('Connecté en tant que Étudiant test · 1 cours'));
+  assert.equal(rendu.sauvegarde.moodle.jeton, 'jeton-moodle-factice');
+  assert.equal(appels.length, 3);
+  assert.ok(appels.every((r) => r.method === 'POST' && !r.url.includes('jeton-moodle-factice')));
+  assert.doesNotMatch(JSON.stringify(rendu.sauvegarde), /mot-de-passe-factice|password|username/);
+  plugin.onglet.display();
+  assert.equal(champ('Jeton Moodle').inputEl.type, 'password');
+  assert.equal(champ('Jeton Moodle').inputEl.value || '', '');
+  assert.doesNotMatch(rendu.textes.join(' '), /jeton-moodle-factice/);
+  await rendu.boutons.get('Se déconnecter de Moodle')();
+  assert.equal(rendu.sauvegarde.moodle.jeton, '');
+});
+
+test('Moodle : un jeton collé est masqué, enregistré, puis réutilisé par Tester', async () => {
+  const { plugin, rendu, obsidian } = charger({});
+  let connexions = 0;
+  obsidian.requestUrl = async (r) => {
+    assert.ok(!r.url.includes('token.php'));
+    const param = new URLSearchParams(r.body);
+    assert.equal(param.get('wstoken'), 'jeton-copie-factice');
+    connexions++;
+    return { status: 200, json: param.get('wsfunction') === 'core_webservice_get_site_info' ? { userid: 42, firstname: 'Étudiant test' } : [] };
+  };
+  await plugin.onload(); plugin.onglet.display();
+  rendu.champs.find((c) => c.nom === 'Adresse du site Moodle').champ.change('https://moodle.exemple.fr');
+  const jeton = rendu.champs.find((c) => c.nom === 'Jeton Moodle').champ;
+  jeton.inputEl.value = 'jeton-copie-factice';
+  await rendu.boutons.get('Tester')();
+  assert.equal(jeton.inputEl.value, '');
+  assert.equal(plugin.etat.moodle.jeton, 'jeton-copie-factice');
+  await rendu.boutons.get('Tester')();
+  assert.equal(connexions, 4);
+});
+
+test('Moodle : les erreurs sont simples et ne reprennent aucun secret de la réponse réseau', async () => {
+  const { plugin, obsidian } = charger({});
+  await plugin.onload();
+  obsidian.requestUrl = async () => ({ status: 200, json: { error: 'jeton-secret-dans-erreur', errorcode: 'invalidlogin' } });
+  await assert.rejects(plugin.connecterMoodle('https://moodle.exemple.fr', '', 'agent-local', 'factice'), /connexion de l’université.*Préférences → Clés de sécurité/);
+  obsidian.requestUrl = async () => ({ status: 200, json: { exception: 'moodle_exception', errorcode: 'invalidtoken', message: 'jeton-secret-dans-erreur' } });
+  await assert.rejects(plugin.connecterMoodle('https://moodle.exemple.fr', 'factice'), (e) => /invalide ou expiré/.test(e.message) && !e.message.includes('jeton-secret-dans-erreur'));
+  obsidian.requestUrl = async () => { throw new Error('https://exemple.fr?token=jeton-secret-dans-erreur'); };
+  await assert.rejects(plugin.connecterMoodle('https://moodle.exemple.fr', 'factice'), (e) => /injoignable/.test(e.message) && !e.message.includes('jeton-secret-dans-erreur'));
+});
+
+async function moodleSimule() {
+  const acces = { site: 'https://moodle.exemple.fr', jeton: 'jeton-import-factice', userid: 42, selections: { 3: { copier: true, dossier: 'Moodle/ENER3' } } };
+  const charge = charger({ moodle: acces }, { crypto: webcrypto });
+  const { plugin, obsidian } = charge, elements = new Map(), appels = [];
+  let horloge = 0;
+  const mettre = (chemin, texte) => {
+    const f = Object.assign(new obsidian.TFile(), { path: chemin, contenu: new TextEncoder().encode(texte).buffer, stat: { mtime: ++horloge } });
+    elements.set(chemin, f); return f;
+  };
+  Object.assign(plugin.app.vault, {
+    getAbstractFileByPath: (p) => elements.get(p), getAllLoadedFiles: () => [...elements.values()], getFiles: () => [...elements.values()].filter((f) => f instanceof obsidian.TFile),
+    readBinary: async (f) => f.contenu, adapter: { exists: async (p) => elements.has(p) },
+    createFolder: async (p) => { elements.set(p, Object.assign(new obsidian.TFolder(), { path: p })); },
+    createBinary: async (p, contenu) => { assert.equal(elements.has(p), false, 'aucun fichier existant écrasé à la création'); const f = mettre(p, ''); f.contenu = contenu; return f; },
+    modifyBinary: async (f, contenu) => { f.contenu = contenu; f.stat.mtime = ++horloge; },
+  });
+  const source = { type: 'file', filename: 'cours.pdf', filepath: '/', fileurl: 'https://moodle.exemple.fr/webservice/pluginfile.php/12/cours.pdf?forcedownload=1', filesize: 7, timemodified: 1 };
+  let texte = 'cours 1';
+  obsidian.requestUrl = async (r) => {
+    appels.push(r);
+    if (!r.body) return { status: 200, arrayBuffer: new TextEncoder().encode(texte).buffer, headers: { 'content-type': 'application/pdf' } };
+    const param = new URLSearchParams(r.body);
+    if (param.get('wsfunction') === 'core_enrol_get_users_courses') return { status: 200, json: [{ id: 3, shortname: 'ENER3', fullname: 'Énergie 3' }] };
+    assert.equal(param.get('wsfunction'), 'core_course_get_contents');
+    return { status: 200, json: [{ id: 1, name: 'Cours', modules: [{ id: 12, modname: 'resource', contents: [source] }] }] };
+  };
+  await plugin.onload();
+  return { ...charge, elements, appels, source, mettre, texte: (p) => new TextDecoder().decode(elements.get(p).contenu), changer: (v) => { texte = v; source.timemodified++; } };
+}
+
+test('Moodle : la fenêtre choisit le partage et une destination par cours', async () => {
+  const { plugin, rendu, interne } = await moodleSimule();
+  plugin.etat.moodle.selections = {};
+  await new interne.CoursMoodleModal(plugin.app, plugin).open();
+  assert.ok(rendu.textes.some((t) => /partagé avec la cordée/.test(t)));
+  const selection = rendu.elements.find((e) => e.attrs.attr?.['aria-label'] === 'Copier dans le coffre : ENER3');
+  assert.equal(selection.checked, false);
+  selection.checked = true; await selection.onchange();
+  assert.equal(rendu.sauvegarde.moodle.selections[3].copier, true);
+  const dossier = rendu.champs.find((c) => c.nom === 'Dossier de destination · ENER3').champ;
+  assert.equal(dossier.value, 'Moodle/ENER3');
+  await dossier.change('Mes cours/ENER3');
+  assert.equal(rendu.sauvegarde.moodle.selections[3].dossier, 'Mes cours/ENER3');
+  await dossier.change('../Configuration');
+  assert.equal(plugin.etat.moodle.selections[3].dossier, 'Mes cours/ENER3');
+  assert.ok(rendu.boutons.has('Récupérer maintenant'));
+  await rendu.boutons.get('Récupérer maintenant')();
+  assert.ok(rendu.textes.includes('Corrige le dossier de destination avant de récupérer les fichiers.'));
+});
+
+test('Moodle : import par le coffre, index, puis aucun téléchargement si rien ne change', async () => {
+  const { plugin, rendu, appels, texte } = await moodleSimule();
+  assert.equal(await plugin.recupererMoodle(), 1);
+  assert.equal(texte('Moodle/ENER3/Cours/cours.pdf'), 'cours 1');
+  assert.match(texte('Moodle/ENER3/Cours.md'), /\[\[Moodle\/ENER3\/Cours\/cours.pdf\|cours.pdf\]\]/);
+  assert.equal(rendu.notice, '1 nouveau fichier dans ENER3');
+  const fichier = appels.find((r) => !r.body);
+  assert.equal(new URL(fichier.url).searchParams.get('token'), 'jeton-import-factice');
+  assert.equal(new URL(fichier.url).searchParams.get('forcedownload'), '1');
+  assert.equal(await plugin.recupererMoodle(), 0);
+  assert.equal(appels.filter((r) => !r.body).length, 1);
+  assert.doesNotMatch(texte('Moodle/ENER3/Cours.md'), /jeton-import-factice|https:/);
+  assert.doesNotMatch(JSON.stringify(plugin.etat.moodle.fichiers), /jeton-import-factice|fileurl/);
+});
+
+test('Moodle : mises à jour conservées à côté des fichiers locaux modifiés, y compris les copies', async () => {
+  const { plugin, mettre, changer, texte } = await moodleSimule();
+  await plugin.recupererMoodle();
+  mettre('Moodle/ENER3/Cours/cours.pdf', 'mes annotations');
+  changer('cours 2'); await plugin.recupererMoodle();
+  assert.equal(texte('Moodle/ENER3/Cours/cours.pdf'), 'mes annotations');
+  assert.equal(texte('Moodle/ENER3/Cours/cours (Moodle).pdf'), 'cours 2');
+  assert.match(texte('Moodle/ENER3/Cours.md'), /cours \(Moodle\).pdf/);
+  changer('cours 3'); await plugin.recupererMoodle();
+  assert.equal(texte('Moodle/ENER3/Cours/cours (Moodle).pdf'), 'cours 3');
+  mettre('Moodle/ENER3/Cours/cours (Moodle).pdf', 'autres annotations');
+  changer('cours 4'); await plugin.recupererMoodle();
+  assert.equal(texte('Moodle/ENER3/Cours/cours (Moodle).pdf'), 'autres annotations');
+  assert.equal(texte('Moodle/ENER3/Cours/cours (Moodle 2).pdf'), 'cours 4');
+});
+
+test('Moodle : un fichier déjà présent et une note d’index modifiée sont préservés', async () => {
+  const { plugin, mettre, changer, texte } = await moodleSimule();
+  mettre('Moodle/ENER3/Cours/cours.pdf', 'version locale préexistante');
+  await plugin.recupererMoodle();
+  assert.equal(texte('Moodle/ENER3/Cours/cours.pdf'), 'version locale préexistante');
+  assert.equal(texte('Moodle/ENER3/Cours/cours (Moodle).pdf'), 'cours 1');
+  mettre('Moodle/ENER3/Cours.md', 'mon index annoté');
+  changer('cours 2'); await plugin.recupererMoodle();
+  assert.equal(texte('Moodle/ENER3/Cours.md'), 'mon index annoté');
+  assert.match(texte('Moodle/ENER3/Cours (Moodle).md'), /^# Énergie 3/);
+});
+
+test('Moodle : les fichiers trop gros ne sont pas téléchargés et les URL externes ne reçoivent pas le jeton', async () => {
+  const { plugin, source, appels, rendu, obsidian } = await moodleSimule();
+  source.filesize = 50 * 1024 * 1024 + 1;
+  assert.equal(await plugin.recupererMoodle(), 0);
+  assert.equal(appels.filter((r) => !r.body).length, 0);
+  assert.match(rendu.notice, /dépassent 50 Mo/);
+  await assert.rejects(plugin.telechargerMoodle({ fileurl: 'https://autre.exemple.fr/cours.pdf' }, plugin.etat.moodle), /autre site/);
+  assert.equal(appels.filter((r) => !r.body).length, 0);
+  obsidian.requestUrl = async () => ({ status: 200, arrayBuffer: { byteLength: 50 * 1024 * 1024 + 1 } });
+  await assert.rejects(plugin.telechargerMoodle(source, plugin.etat.moodle), /dépasse 50 Mo/);
+});
+
+test('Moodle : déconnexion pendant le téléchargement, aucun fichier importé après coup', async () => {
+  const { plugin, obsidian, elements } = await moodleSimule();
+  const requete = obsidian.requestUrl;
+  let liberer, debut;
+  const telechargement = new Promise((r) => { debut = r; });
+  obsidian.requestUrl = async (r) => {
+    if (r.body) return requete(r);
+    debut(); return new Promise((r) => { liberer = () => r({ status: 200, arrayBuffer: new TextEncoder().encode('cours 1').buffer }); });
+  };
+  const recuperation = plugin.recupererMoodle();
+  await telechargement; await plugin.deconnecterMoodle(); liberer();
+  await assert.rejects(recuperation, /arrêtée/);
+  assert.equal([...elements.values()].filter((f) => f instanceof obsidian.TFile).length, 0);
+  assert.equal(plugin.etat.moodle.jeton, '');
+});
+
+test('Moodle : déconnexion pendant Tester, le jeton tardif n’est jamais sauvegardé', async () => {
+  const { plugin, obsidian } = charger({});
+  await plugin.onload();
+  let liberer;
+  obsidian.requestUrl = async (r) => {
+    const fonction = new URLSearchParams(r.body).get('wsfunction');
+    if (fonction === 'core_webservice_get_site_info') return new Promise((resolve) => { liberer = () => resolve({ status: 200, json: { userid: 42, firstname: 'Étudiant test' } }); });
+    return { status: 200, json: [] };
+  };
+  const connexion = plugin.connecterMoodle('https://moodle.exemple.fr', 'jeton-tardif-factice');
+  await plugin.deconnecterMoodle(); liberer();
+  await assert.rejects(connexion, /arrêtée/);
+  assert.equal(plugin.etat.moodle.jeton, '');
+});
+
+test('Moodle : les automatismes attendent 6 h et ne lancent rien après déconnexion', async () => {
+  const { plugin } = await moodleSimule();
+  let nombre = 0;
+  plugin.recupererMoodle = async () => { nombre++; };
+  plugin.etat.moodle.derniereRecuperation = Date.now();
+  plugin.demarrerMoodle();
+  assert.equal(nombre, 0);
+  plugin.etat.moodle.derniereRecuperation = Date.now() - 6 * 3600_000 - 100;
+  plugin.intervalle();
+  assert.equal(nombre, 1);
+  await plugin.deconnecterMoodle(); plugin.intervalle();
+  assert.equal(nombre, 1);
+});
+
+test('Moodle : fichiers supprimés localement récupérés à nouveau et cours non sélectionnés ignorés', async () => {
+  const { plugin, elements, appels } = await moodleSimule();
+  plugin.etat.moodle.selections[3].copier = false;
+  assert.equal(await plugin.recupererMoodle(), 0);
+  assert.equal(appels.filter((r) => !r.body).length, 0);
+  plugin.etat.moodle.selections[3].copier = true;
+  await plugin.recupererMoodle();
+  elements.delete('Moodle/ENER3/Cours/cours.pdf');
+  assert.equal(await plugin.recupererMoodle(), 1);
+  assert.equal(appels.filter((r) => !r.body).length, 2);
 });

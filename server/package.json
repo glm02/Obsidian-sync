@@ -7,7 +7,7 @@
   "engines": { "node": ">=22.18" },
   "scripts": {
     "start": "node --disable-warning=ExperimentalWarning src/main.ts",
-    "test": "node --disable-warning=ExperimentalWarning --test test/api.test.ts ../plugin/test/fusion.test.mjs ../plugin/test/interface.test.mjs ../plugin/test/calendrier.test.mjs test/synchro.test.ts"
+    "test": "node --disable-warning=ExperimentalWarning --test test/api.test.ts ../plugin/test/fusion.test.mjs ../plugin/test/interface.test.mjs ../plugin/test/calendrier.test.mjs ../plugin/test/moodle.test.mjs test/synchro.test.ts"
   },
   "license": "MIT"
 }
