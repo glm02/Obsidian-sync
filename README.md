@@ -109,6 +109,9 @@ Les membres et l’activité affichent la photo ou les initiales, toujours avec 
 
 ## Développer
 
+Pour lire le code, consulter tes schémas et ajouter des calculs dans tes notes,
+consulte le [guide des logiciels GEII](docs/geii.md).
+
 ```sh
 cd server
 npm test

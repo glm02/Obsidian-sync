@@ -250,3 +250,23 @@ button.cordee-evenement-ligne:not(.clickable-icon):hover { background-color: var
 .cordee-presence-membre[data-en-ligne="true"] { color: var(--color-green); }
 .cordee-presence-membre[data-en-ligne="true"]::before,
 .cordee-presence-barre::before { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--color-green); margin-inline-end: var(--size-4-1); vertical-align: middle; }
+/* ---------- Logiciels GEII ---------- */
+.cordee-geii-vue { display: flex; flex-direction: column; gap: var(--size-4-3); height: 100%; padding: var(--size-4-3); }
+.cordee-geii-commandes { display: flex; flex-wrap: wrap; gap: var(--size-4-2); flex: none; }
+.cordee-geii-contenu { flex: 1; min-height: 0; overflow: auto; }
+.cordee-geii-editeur { display: flex; height: 100%; min-height: 180px; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); overflow: hidden; }
+.cordee-geii-numeros, textarea.cordee-geii-code { box-sizing: border-box; margin: 0; padding: 10px; border: 0; border-radius: 0; font-family: var(--font-monospace); font-size: var(--font-text-size); line-height: 1.5; tab-size: 4; white-space: pre; }
+.cordee-geii-numeros { flex: none; min-width: 3em; height: 100%; overflow: hidden; background: var(--background-secondary); color: var(--text-faint); text-align: end; user-select: none; }
+textarea.cordee-geii-code { flex: 1; min-width: 0; width: 100%; height: 100%; resize: none; overflow: auto; background: var(--background-primary); color: var(--text-normal); box-shadow: none; }
+textarea.cordee-geii-code:focus { outline: 1px solid var(--interactive-accent); outline-offset: -1px; }
+.cordee-geii-aide { color: var(--text-muted); font-size: var(--font-ui-small); }
+.cordee-geii-schema { max-width: 100%; overflow: auto; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); background: var(--background-primary); }
+.cordee-geii-schema svg { display: block; min-width: 0; color: var(--text-normal); }
+.cordee-geii-schema line, .cordee-geii-schema path, .cordee-geii-schema rect { fill: none; stroke: var(--text-normal); stroke-width: 1.5; }
+.cordee-geii-schema rect { fill: var(--background-secondary); }
+.cordee-geii-schema circle { fill: var(--interactive-accent); }
+.cordee-geii-schema text { fill: var(--text-normal); font-family: var(--font-monospace); }
+.cordee-geii-tableau { max-width: 100%; overflow-x: auto; }
+.cordee-geii-tableau table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.cordee-geii-tableau th, .cordee-geii-tableau td { padding: 6px 10px; border-bottom: 1px solid var(--background-modifier-border); text-align: start; overflow-wrap: anywhere; }
+.cordee-geii-tableau th { color: var(--text-muted); }
