@@ -423,7 +423,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.3';
+const VERSION = '0.4.4';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -3047,7 +3047,7 @@ Object.assign(CordeePlugin.prototype, {
         const sections = await this.apiMoodle('core_course_get_contents', { courseid: coursActuel.id }, m);
         if (!Array.isArray(sections)) throw erreurMoodle();
         if (this.arret || m !== this.etat.moodle) throw new Error('La récupération Moodle a été arrêtée.');
-        const fichiers = fichiersMoodle(sections, destination, coursActuel.id);
+        const fichiers = fichiersMoodle(sections, destination, coursActuel.id).filter((f) => !m.fichiers[f.cle]?.ignorer);
         const couverture = imageCoursMoodle(coursActuel, destination);
         if (couverture) {
           try {

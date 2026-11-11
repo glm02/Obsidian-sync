@@ -1239,6 +1239,20 @@ test('Moodle : import par le coffre, index, puis aucun téléchargement si rien 
   assert.doesNotMatch(JSON.stringify(plugin.etat.moodle.fichiers), /jeton-import-factice|fileurl/);
 });
 
+test('Moodle : un fichier explicitement exclu ne revient pas après sa suppression locale', async () => {
+  const { plugin, elements, appels, texte } = await moodleSimule();
+  await plugin.recupererMoodle();
+  const entree = Object.values(plugin.etat.moodle.fichiers)[0];
+  entree.ignorer = true;
+  elements.delete(entree.chemin);
+  const avant = appels.filter((r) => !r.body).length;
+  assert.equal(await plugin.recupererMoodle(), 0);
+  assert.equal(appels.filter((r) => !r.body).length, avant);
+  assert.equal(elements.has(entree.chemin), false);
+  assert.doesNotMatch(texte('Moodle/ENER3/Cours.md'), /cours\.pdf/);
+  assert.equal(entree.ignorer, true);
+});
+
 const PNG_COURS_FICTIF = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==', 'base64');
 const couvertureFictive = (autre = {}) => ({ filename: 'couverture.png', fileurl: 'https://moodle.exemple.fr/webservice/pluginfile.php/42/couverture.png', filesize: PNG_COURS_FICTIF.length, timemodified: 1, mimetype: 'image/png', ...autre });
 

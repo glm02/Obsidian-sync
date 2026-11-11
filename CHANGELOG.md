@@ -1,5 +1,9 @@
 # Nouveautés
 
+## 0.4.4
+
+- La récupération Moodle respecte les fichiers explicitement exclus dans son suivi local : ils ne sont plus retéléchargés ni réintroduits dans l’index du cours après un nettoyage du coffre.
+
 ## 0.4.3
 
 - **Cours Moodle illustrés** : cartes avec les vignettes officielles, titre, description courte, recherche par nom ou matière et ouverture du cours déjà récupéré. Affichage adapté aux écrans étroits.
