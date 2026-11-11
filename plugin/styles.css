@@ -276,4 +276,35 @@ textarea.cordee-geii-code:focus { outline: 1px solid var(--interactive-accent); 
 .cordee-moodle-cours { border-top: 1px solid var(--background-modifier-border); padding: var(--size-4-3) 0; }
 .cordee-moodle-cours > label { display: flex; align-items: center; gap: var(--size-4-2); color: var(--text-normal); }
 .cordee-moodle-cours input[type="checkbox"] { margin: 0; }
+.modal.cordee-moodle-modal { width: min(960px, 94vw); max-width: 960px; }
+.cordee-moodle-aide { color: var(--text-muted); font-size: var(--font-ui-small); margin-bottom: var(--size-4-3); }
+.cordee-moodle-aide summary, .cordee-moodle-destination summary { cursor: pointer; }
+.cordee-moodle-compteur { color: var(--text-muted); font-size: var(--font-ui-small); }
+.cordee-moodle-grille { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); gap: var(--size-4-4); margin-bottom: var(--size-4-4); }
+.cordee-moodle-carte { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-m); overflow: hidden; background: var(--background-primary); }
+.cordee-moodle-carte[hidden] { display: none; }
+.cordee-moodle-carte[data-selectionne="true"] { border-color: var(--interactive-accent); }
+.cordee-moodle-visuel { position: relative; display: grid; place-items: center; height: 140px; overflow: hidden; background: var(--background-secondary); border-bottom: 1px solid var(--background-modifier-border); }
+.cordee-moodle-visuel img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.cordee-moodle-visuel img[hidden], .cordee-moodle-repli[hidden] { display: none; }
+.cordee-moodle-repli { color: var(--text-faint); font-size: 36px; font-weight: var(--font-semibold); letter-spacing: .05em; }
+.cordee-moodle-carte-contenu { display: flex; flex: 1; flex-direction: column; align-items: stretch; gap: var(--size-4-2); padding: var(--size-4-4); }
+.cordee-moodle-code { color: var(--text-muted); font-size: var(--font-ui-smaller); font-weight: var(--font-semibold); overflow-wrap: anywhere; }
+.cordee-moodle-carte h3 { margin: 0; font-size: var(--font-ui-medium); line-height: 1.4; overflow-wrap: anywhere; }
+.cordee-moodle-description { margin: 0 0 var(--size-4-2); color: var(--text-muted); font-size: var(--font-ui-small); line-height: 1.5; overflow-wrap: anywhere; }
+.cordee-moodle-selection { display: flex; align-items: center; gap: var(--size-4-2); margin-top: auto; padding-top: var(--size-4-2); }
+.cordee-moodle-selection input { margin: 0; }
+.cordee-moodle-destination { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.cordee-moodle-destination .setting-item { display: block; padding-bottom: 0; border: 0; }
+.cordee-moodle-destination .setting-item-info { margin-bottom: var(--size-4-2); }
+.cordee-moodle-destination .setting-item-control, .cordee-moodle-destination input { width: 100%; }
+.cordee-moodle-carte-contenu > .setting-item { padding: var(--size-4-2) 0 0; border: 0; }
+.cordee-moodle-carte-contenu > .setting-item .setting-item-info { display: none; }
+.cordee-moodle-carte-contenu > .setting-item .setting-item-control { justify-content: flex-start; flex: 1; }
+.cordee-moodle-carte-contenu > .setting-item button { width: 100%; }
+.cordee-moodle-actions { position: sticky; bottom: 0; z-index: 1; padding: var(--size-4-3) 0; border-top: 1px solid var(--background-modifier-border); background: var(--background-primary); }
+@media (max-width: 480px) {
+  .cordee-moodle-grille { grid-template-columns: minmax(0, 1fr); }
+  .cordee-moodle-visuel { height: 125px; }
+}
 /* ---------- Fin Moodle ---------- */

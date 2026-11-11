@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.3
+
+- **Cours Moodle illustrés** : cartes avec les vignettes officielles, titre, description courte, recherche par nom ou matière et ouverture du cours déjà récupéré. Affichage adapté aux écrans étroits.
+- Les couvertures des cours sélectionnés sont copiées dans `_Médias/` et affichées dans `Cours.md`, avec la description et les aperçus des ressources PNG, JPEG, GIF et WebP. Les images déjà récupérées sont réutilisées et les modifications locales restent protégées.
+- Les couvertures sont limitées à 5 Mo et vérifiées avant affichage. Un visuel absent ou refusé laisse le cours accessible. Les aperçus utilisent des adresses locales temporaires, sans jeton dans l’interface ni dans les notes.
+
 ## 0.4.2
 
 - **Retour de connexion Moodle corrigé** : les liens de connexion contenant une clé privée alphanumérique de 64 caractères sont acceptés. Cette partie optionnelle reste ignorée ; seul le jeton de service web est enregistré. Les tests utilisent des clés fictives au format Moodle.

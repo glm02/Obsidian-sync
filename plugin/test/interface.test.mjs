@@ -64,7 +64,7 @@ function charger(etat, navigateur = {}) {
     addIcon(id, svg) { rendu.icone = { id, svg }; },
     Notice: class { constructor(text) { rendu.notice = text; rendu.notices.push(text); } },
   };
-  const context = { require: () => obsidian, module: { exports: {} }, TextEncoder, TextDecoder, clearTimeout, URL, URLSearchParams, atob, window: { setInterval: callback => callback }, ...navigateur };
+  const context = { require: () => obsidian, module: { exports: {} }, TextEncoder, TextDecoder, clearTimeout, URL, URLSearchParams, atob, Blob, window: { setInterval: callback => callback }, ...navigateur };
   vm.runInNewContext(readFileSync(new URL('../main.js', import.meta.url), 'utf8'), context);
   return { plugin: new context.module.exports(), rendu, obsidian, interne: context.module.exports.interne, container };
 }
@@ -1172,9 +1172,9 @@ test('Moodle : distingue un jeton rejeté, un accès refusé et un service indis
   }
 });
 
-async function moodleSimule() {
+async function moodleSimule(navigateur = {}) {
   const acces = { site: 'https://moodle.exemple.fr', jeton: 'jeton-import-factice', userid: 42, selections: { 3: { copier: true, dossier: 'Moodle/ENER3' } } };
-  const charge = charger({ moodle: acces }, { crypto: webcrypto });
+  const charge = charger({ moodle: acces }, { crypto: webcrypto, ...navigateur });
   const { plugin, obsidian } = charge, elements = new Map(), appels = [];
   let horloge = 0;
   const mettre = (chemin, texte) => {
@@ -1237,6 +1237,123 @@ test('Moodle : import par le coffre, index, puis aucun téléchargement si rien 
   assert.equal(appels.filter((r) => !r.body).length, 1);
   assert.doesNotMatch(texte('Moodle/ENER3/Cours.md'), /jeton-import-factice|https:/);
   assert.doesNotMatch(JSON.stringify(plugin.etat.moodle.fichiers), /jeton-import-factice|fileurl/);
+});
+
+const PNG_COURS_FICTIF = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==', 'base64');
+const couvertureFictive = (autre = {}) => ({ filename: 'couverture.png', fileurl: 'https://moodle.exemple.fr/webservice/pluginfile.php/42/couverture.png', filesize: PNG_COURS_FICTIF.length, timemodified: 1, mimetype: 'image/png', ...autre });
+
+test('Moodle : couverture copiée une fois, index illustré, copie locale préservée et aucun jeton dans le coffre', async () => {
+  const { plugin, obsidian, texte, mettre, elements, interne, rendu } = await moodleSimule();
+  const original = obsidian.requestUrl, couverture = couvertureFictive();
+  let images = 0;
+  obsidian.requestUrl = async (r) => {
+    if (!r.body && new URL(r.url).pathname.endsWith('/couverture.png')) {
+      images++;
+      return { status: 200, arrayBuffer: PNG_COURS_FICTIF.buffer.slice(PNG_COURS_FICTIF.byteOffset, PNG_COURS_FICTIF.byteOffset + PNG_COURS_FICTIF.length), headers: { 'content-type': 'image/png' } };
+    }
+    const reponse = await original(r);
+    if (r.body && new URLSearchParams(r.body).get('wsfunction') === 'core_enrol_get_users_courses') reponse.json[0].overviewfiles = [couverture];
+    return reponse;
+  };
+  await plugin.recupererMoodle();
+  assert.ok(elements.has('Moodle/ENER3/_Médias/Couverture.png'));
+  assert.ok(texte('Moodle/ENER3/Cours.md').includes('![[Moodle/ENER3/_Médias/Couverture.png|640]]'));
+  let ouvert;
+  plugin.app.workspace.openLinkText = (chemin) => { ouvert = chemin; };
+  const modal = new interne.CoursMoodleModal(plugin.app, plugin);
+  await modal.open();
+  await rendu.boutons.get('Ouvrir le cours')();
+  assert.equal(ouvert, 'Moodle/ENER3/Cours.md');
+  modal.onClose();
+  assert.equal(images, 1, 'une couverture déjà présente est lue localement pour la carte');
+  await plugin.recupererMoodle();
+  assert.equal(images, 1);
+  mettre('Moodle/ENER3/_Médias/Couverture.png', 'ma couverture');
+  couverture.timemodified++;
+  await plugin.recupererMoodle();
+  assert.equal(texte('Moodle/ENER3/_Médias/Couverture.png'), 'ma couverture');
+  assert.ok(texte('Moodle/ENER3/Cours.md').includes('![[Moodle/ENER3/_Médias/Couverture (Moodle).png|640]]'));
+  assert.doesNotMatch(JSON.stringify(plugin.etat.moodle.fichiers), /fileurl|https:|jeton-import-factice/);
+});
+
+test('Moodle : une couverture externe ou un faux PNG ne bloque pas les ressources et ne reçoit aucun jeton', async () => {
+  for (const externe of [true, false]) {
+    const { plugin, obsidian, texte, elements, appels } = await moodleSimule();
+    const original = obsidian.requestUrl;
+    obsidian.requestUrl = async (r) => {
+      const reponse = await original(r);
+      if (r.body && new URLSearchParams(r.body).get('wsfunction') === 'core_enrol_get_users_courses') {
+        reponse.json[0].overviewfiles = [couvertureFictive(externe ? { fileurl: 'https://autre.exemple.fr/couverture.png' } : {})];
+      }
+      return reponse; // Le faux PNG reçoit les octets du PDF fictif : signature invalide.
+    };
+    await plugin.recupererMoodle();
+    assert.equal(texte('Moodle/ENER3/Cours/cours.pdf'), 'cours 1');
+    assert.equal(elements.has('Moodle/ENER3/_Médias/Couverture.png'), false);
+    assert.ok(plugin.etat.moodle.avertissements.some((s) => /couverture/.test(s)));
+    assert.equal(appels.some((r) => r.url.includes('autre.exemple.fr')), false);
+  }
+});
+
+test('Moodle : cartes illustrées, recherche sans accents et libération des images à la fermeture', async () => {
+  const crees = [], liberes = [];
+  class URLApercu extends URL {
+    static createObjectURL(blob) { assert.equal(blob.type, 'image/png'); const url = 'blob:apercu-' + crees.length; crees.push(url); return url; }
+    static revokeObjectURL(url) { liberes.push(url); }
+  }
+  const { plugin, obsidian, interne, rendu, elements } = await moodleSimule({ URL: URLApercu });
+  const original = obsidian.requestUrl;
+  let images = 0;
+  obsidian.requestUrl = async (r) => {
+    if (!r.body) {
+      images++;
+      return { status: 200, arrayBuffer: Uint8Array.from(PNG_COURS_FICTIF).buffer, headers: { 'content-type': 'image/png' } };
+    }
+    const reponse = await original(r);
+    if (new URLSearchParams(r.body).get('wsfunction') === 'core_enrol_get_users_courses') {
+      reponse.json[0].overviewfiles = [couvertureFictive()];
+      reponse.json[0].summary = '<p>Circuits et conversion</p>';
+      reponse.json.push({ id: 4, shortname: 'INFO3', fullname: 'Informatique' });
+    }
+    return reponse;
+  };
+  const modal = new interne.CoursMoodleModal(plugin.app, plugin);
+  await modal.open();
+  assert.equal(images, 1);
+  const image = rendu.elements.find((e) => e.tag === 'img');
+  assert.equal(image.attrs.attr.src, 'blob:apercu-0');
+  assert.doesNotMatch(JSON.stringify(rendu.elements.map((e) => e.attrs)), /jeton-import-factice|token=/);
+  const cartes = rendu.elements.filter((e) => e.attrs.cls === 'cordee-moodle-carte');
+  assert.equal(cartes.length, 2);
+  const recherche = rendu.champs.find((c) => c.nom === 'Rechercher un cours').champ;
+  recherche.change('energie');
+  assert.equal(cartes[0].hidden, false);
+  assert.equal(cartes[1].hidden, true);
+  assert.ok(rendu.textes.includes('1 cours · 1 sélectionné'));
+  recherche.change('aucun résultat');
+  assert.ok(cartes.every((c) => c.hidden));
+  recherche.change('');
+  assert.ok(cartes.every((c) => !c.hidden));
+  assert.equal([...elements.keys()].some((p) => p.includes('Couverture')), false, 'les aperçus seuls n’écrivent rien dans le coffre');
+  modal.onClose();
+  assert.deepEqual(liberes, crees);
+});
+
+test('Moodle : fermer les cartes pendant un téléchargement ne crée pas d’image tardive', async () => {
+  let images = 0, terminer, demarrer;
+  class URLApercu extends URL { static createObjectURL() { images++; return 'blob:tardif'; } }
+  const { plugin, obsidian, interne } = await moodleSimule({ URL: URLApercu });
+  const original = obsidian.requestUrl;
+  const commence = new Promise((resolve) => { demarrer = resolve; });
+  obsidian.requestUrl = async (r) => {
+    if (!r.body) { demarrer(); return new Promise((resolve) => { terminer = () => resolve({ status: 200, arrayBuffer: Uint8Array.from(PNG_COURS_FICTIF).buffer }); }); }
+    const reponse = await original(r);
+    if (new URLSearchParams(r.body).get('wsfunction') === 'core_enrol_get_users_courses') reponse.json[0].overviewfiles = [couvertureFictive()];
+    return reponse;
+  };
+  const modal = new interne.CoursMoodleModal(plugin.app, plugin), ouverture = modal.open();
+  await commence; modal.onClose(); terminer(); await ouverture;
+  assert.equal(images, 0);
 });
 
 test('Moodle : mises à jour conservées à côté des fichiers locaux modifiés, y compris les copies', async () => {

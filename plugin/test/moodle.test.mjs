@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { nomMoodle, dossierMoodle, siteMoodle, lienConnexionMoodle, jetonDepuisLienMoodle, fichiersMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, markdownMoodle, devoirMoodle, noteAnnoncesMoodle } = require('../main.js').interne;
+const { nomMoodle, dossierMoodle, siteMoodle, lienConnexionMoodle, jetonDepuisLienMoodle, fichiersMoodle, imageCoursMoodle, typeImageMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, markdownMoodle, devoirMoodle, noteAnnoncesMoodle } = require('../main.js').interne;
 const fichier = (autre = {}) => ({ type: 'file', filename: 'cours.pdf', filepath: '/', fileurl: 'https://moodle.exemple.fr/webservice/pluginfile.php/12/cours.pdf', filesize: 120, timemodified: 17, ...autre });
 const sections = [{ id: 1, name: 'TD / TP', modules: [
   { id: 10, modname: 'resource', contents: [fichier()] },
@@ -125,6 +125,45 @@ test('Moodle : HTML converti en paragraphes et listes, scripts et liens actifs �
   assert.doesNotMatch(markdownMoodle('&lt;script&gt;alert(3)&lt;/script&gt;<p>Texte</p>'), /script|alert|<|>/);
   assert.doesNotMatch(markdownMoodle('&amp;lt;script&amp;gt;alert(4)&amp;lt;/script&amp;gt;'), /script|alert|<|>/);
   assert.equal(markdownMoodle('<p>![image](https://exemple.fr)</p>').startsWith('\\!\\['), true);
+});
+
+test('Moodle : couverture officielle, sous-dossier conservé, images trop grandes et SVG ignorés', () => {
+  const image = { filename: 'banniere.png', fileurl: 'https://moodle.exemple.fr/campus/webservice/pluginfile.php/42/course/overviewfiles/banniere.png', filesize: 180, timemodified: 9, mimetype: 'image/png' };
+  const cours = { id: 3, overviewfiles: [{ ...image, mimetype: 'image/svg+xml', fileurl: 'https://moodle.exemple.fr/couverture.svg' }, image] };
+  const couverture = imageCoursMoodle(cours, 'Moodle/Énergie');
+  assert.equal(couverture.fileurl, image.fileurl);
+  assert.equal(couverture.chemin, 'Moodle/Énergie/_Médias/Couverture.png');
+  assert.equal(couverture.timemodified, 9);
+  assert.equal(imageCoursMoodle({ id: 3, courseimage: 'https://moodle.exemple.fr/campus/pluginfile.php/42/couverture.jpg' }, 'Cours').fileurl,
+    'https://moodle.exemple.fr/campus/webservice/pluginfile.php/42/couverture.jpg');
+  assert.equal(imageCoursMoodle({ id: 3, overviewfiles: [{ ...image, filesize: 5 * 1024 * 1024 + 1 }] }, 'Cours'), null);
+  assert.equal(imageCoursMoodle({ id: 3, courseimage: 'https://moodle.exemple.fr/default.svg' }, 'Cours'), null);
+  assert.equal(imageCoursMoodle({ id: 3 }, 'Cours'), null);
+});
+
+test('Moodle : le contenu binaire des couvertures est vérifié avant affichage', () => {
+  assert.equal(typeImageMoodle(Uint8Array.from([137, 80, 78, 71, 13, 10, 26, 10]).buffer), 'image/png');
+  assert.equal(typeImageMoodle(Uint8Array.from([255, 216, 255]).buffer), 'image/jpeg');
+  assert.equal(typeImageMoodle(new TextEncoder().encode('GIF89a').buffer), 'image/gif');
+  assert.equal(typeImageMoodle(new TextEncoder().encode('RIFF0000WEBP').buffer), 'image/webp');
+  for (const texte of ['<svg onload="alert(1)"></svg>', '<html>Connexion</html>', '{"error":"invalidtoken"}', 'PNG']) {
+    assert.equal(typeImageMoodle(new TextEncoder().encode(texte).buffer), null);
+  }
+  assert.equal(typeImageMoodle(new ArrayBuffer(5 * 1024 * 1024 + 1)), null);
+});
+
+test('Moodle : index illustré avec couverture locale, description nettoyée et aperçus des ressources images', () => {
+  const image = { ...fichier(), filename: 'schema.png', fileurl: 'https://moodle.exemple.fr/webservice/pluginfile.php/42/schema.png' };
+  const cours = { id: 3, fullname: 'Énergie', summary: '<p>Étude des circuits</p><script>intrusion()</script>', overviewfiles: [image] };
+  const couverture = imageCoursMoodle(cours, 'Moodle/ENER3');
+  const ressources = fichiersMoodle([{ name: 'Schémas', modules: [{ id: 12, modname: 'resource', contents: [image] }] }], 'Moodle/ENER3', 3);
+  const cache = Object.fromEntries([couverture, ...ressources].map((f) => [f.cle, { source: f.chemin, chemin: copieMoodle(f.chemin) }]));
+  const note = indexMoodle(cours, [], ressources, cache, couverture);
+  assert.ok(note.includes('![[Moodle/ENER3/_Médias/Couverture (Moodle).png|640]]'));
+  assert.ok(note.includes('![[Moodle/ENER3/Schémas/schema (Moodle).png|640]]'));
+  assert.match(note, /Étude des circuits/);
+  assert.doesNotMatch(note, /https:|fileurl|token|<script|intrusion/);
+  assert.doesNotMatch(indexMoodle(cours, [], ressources, {}, couverture), /!\[\[/);
 });
 
 test('Moodle : devoirs individuels, brouillons, rendus en groupe et prolongations', () => {

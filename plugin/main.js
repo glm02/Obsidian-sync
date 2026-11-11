@@ -423,7 +423,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.2';
+const VERSION = '0.4.3';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -2655,6 +2655,7 @@ function enregistrerGeii(plugin) {
 /* ---------- Moodle ---------- */
 
 const TAILLE_MAX_MOODLE = 50 * 1024 * 1024;
+const TAILLE_MAX_IMAGE_MOODLE = 5 * 1024 * 1024;
 const DELAI_MOODLE = 6 * 3600_000;
 const AIDE_JETON_MOODLE = 'Ton Moodle utilise peut-être la connexion de l’université : choisis « Se connecter via le navigateur ». Si tu disposes déjà d’une clé « Moodle mobile web service » dans Préférences → Clés de sécurité, tu peux aussi la coller. La clé RSS ne convient pas.';
 
@@ -2743,8 +2744,41 @@ function fichiersMoodle(sections, destination, coursId) {
   return sortie;
 }
 
-function indexMoodle(cours, sections, fichiers, cache) {
-  const lignes = [`# ${nomMoodle(cours.fullname || cours.shortname)}`, '', 'Fichiers récupérés depuis Moodle. Ce dossier est partagé avec la cordée sauf s’il figure dans « Dossiers non partagés ».', ''];
+function imageCoursMoodle(cours, destination) {
+  const extensions = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' };
+  const candidats = [...(cours.overviewfiles || [])];
+  if (cours.courseimage) candidats.push({ fileurl: cours.courseimage, timemodified: cours.timemodified });
+  for (const f of candidats) {
+    let url;
+    try { url = new URL(f.fileurl); } catch { continue; }
+    const ext = extensions[f.mimetype] || /\.(png|jpe?g|gif|webp)$/i.exec(url.pathname)?.[1]?.toLowerCase();
+    const taille = Number(f.filesize || 0), modifie = Number(f.timemodified || 0);
+    if (!ext || !Number.isFinite(taille) || taille < 0 || taille > TAILLE_MAX_IMAGE_MOODLE || !Number.isFinite(modifie)) continue;
+    // L’API peut renvoyer l’adresse web de la couverture plutôt que celle du service mobile.
+    if (!url.pathname.includes('/webservice/pluginfile.php/')) url.pathname = url.pathname.replace('/pluginfile.php/', '/webservice/pluginfile.php/');
+    const filename = 'Couverture.' + (ext === 'jpeg' ? 'jpg' : ext);
+    return { cle: JSON.stringify([cours.id, 'couverture']), chemin: dossierMoodle(destination) + '/_Médias/' + filename,
+      filename, fileurl: url.href, filesize: taille, timemodified: modifie };
+  }
+  return null;
+}
+
+function typeImageMoodle(buf) {
+  const b = new Uint8Array(buf), ascii = (de, a) => String.fromCharCode(...b.slice(de, a));
+  if (b.length > TAILLE_MAX_IMAGE_MOODLE) return null;
+  if (b.length >= 8 && b[0] === 137 && ascii(1, 4) === 'PNG' && b[4] === 13 && b[5] === 10 && b[6] === 26 && b[7] === 10) return 'image/png';
+  if (b.length >= 3 && b[0] === 255 && b[1] === 216 && b[2] === 255) return 'image/jpeg';
+  if (ascii(0, 6) === 'GIF87a' || ascii(0, 6) === 'GIF89a') return 'image/gif';
+  if (b.length >= 12 && ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP') return 'image/webp';
+  return null;
+}
+
+function indexMoodle(cours, sections, fichiers, cache, couverture = null) {
+  const lignes = [`# ${nomMoodle(cours.fullname || cours.shortname)}`, ''];
+  const image = couverture && cache[couverture.cle];
+  if (image && image.source === couverture.chemin) lignes.push(`![[${image.chemin}|640]]`, '');
+  if (cours.summary) lignes.push(markdownMoodle(cours.summary), '');
+  lignes.push('Fichiers récupérés depuis Moodle. Ce dossier est partagé avec la cordée sauf s’il figure dans « Dossiers non partagés ».', '');
   const titres = new Set(fichiers.map((f) => f.section));
   for (const section of sections || []) titres.add(nomMoodle(section.name, 'Général'));
   for (const titre of titres) {
@@ -2753,6 +2787,7 @@ function indexMoodle(cours, sections, fichiers, cache) {
     for (const f of presents) {
       const recu = cache[f.cle];
       lignes.push(recu && recu.source === f.chemin ? `- [[${recu.chemin}|${f.filename}]]` : `- ${f.filename} — ${f.filesize > TAILLE_MAX_MOODLE ? 'dépasse 50 Mo' : 'pas encore récupéré'}`);
+      if (recu && recu.source === f.chemin && /\.(png|jpe?g|gif|webp)$/i.test(f.filename)) lignes.push('', `![[${recu.chemin}|640]]`, '');
     }
     if (!presents.length) lignes.push('Aucun fichier de ressource ou de dossier.');
     lignes.push('');
@@ -2960,6 +2995,12 @@ Object.assign(CordeePlugin.prototype, {
     }
     return buf;
   },
+  async telechargerImageMoodle(fichier, acces) {
+    const buf = await this.telechargerMoodle(fichier, acces);
+    const type = typeImageMoodle(buf);
+    if (!type) throw new Error('Cette couverture n’est pas une image PNG, JPEG, GIF ou WebP de moins de 5 Mo.');
+    return { buf, type };
+  },
   trouverMoodle(chemin) {
     const vault = this.app.vault;
     return vault.getAbstractFileByPath(chemin) || (vault.getAllLoadedFiles?.() || []).find((f) => f.path.toLowerCase() === chemin.toLowerCase()) || null;
@@ -3005,7 +3046,21 @@ Object.assign(CordeePlugin.prototype, {
         const destination = dossierMoodle(choix.dossier);
         const sections = await this.apiMoodle('core_course_get_contents', { courseid: coursActuel.id }, m);
         if (!Array.isArray(sections)) throw erreurMoodle();
+        if (this.arret || m !== this.etat.moodle) throw new Error('La récupération Moodle a été arrêtée.');
         const fichiers = fichiersMoodle(sections, destination, coursActuel.id);
+        const couverture = imageCoursMoodle(coursActuel, destination);
+        if (couverture) {
+          try {
+            const avant = m.fichiers[couverture.cle];
+            if (doitTelechargerMoodle(couverture, avant, !!(avant && this.trouverMoodle(avant.chemin)))) {
+              const { buf } = await this.telechargerImageMoodle(couverture, m);
+              const recu = await this.ecrireMoodle(couverture.chemin, buf, avant, m);
+              m.fichiers[couverture.cle] = { ...recu, timemodified: couverture.timemodified, filesize: couverture.filesize };
+              await this.saveData(this.etat);
+            }
+          } catch { avertissements.push(`La couverture de ${nomMoodle(coursActuel.shortname || coursActuel.fullname)} n’a pas pu être récupérée.`); }
+        }
+        if (this.arret || m !== this.etat.moodle) throw new Error('La récupération Moodle a été arrêtée.');
         let nombre = 0;
         for (const fichier of fichiers) {
           if (fichier.filesize > TAILLE_MAX_MOODLE) { tropGros++; continue; }
@@ -3017,7 +3072,7 @@ Object.assign(CordeePlugin.prototype, {
           await this.saveData(this.etat);
           nombre++; total++;
         }
-        const note = versBuffer(indexMoodle(coursActuel, sections, fichiers, m.fichiers));
+        const note = versBuffer(indexMoodle(coursActuel, sections, fichiers, m.fichiers, couverture));
         m.index[coursActuel.id] = await this.ecrireMoodle(destination + '/Cours.md', note, m.index[coursActuel.id], m);
         try { await this.actualiserAnnoncesMoodle(coursActuel, destination, m); }
         catch { avertissements.push(`Les annonces de ${nomMoodle(coursActuel.shortname || coursActuel.fullname)} n’ont pas pu être actualisées.`); }
@@ -3102,27 +3157,55 @@ if (O) CoursMoodleModal = class extends O.Modal {
   constructor(app, plugin) { super(app); this.plugin = plugin; }
   async onOpen() {
     const c = this.contentEl, p = this.plugin, m = p.etat.moodle;
+    this.objetsImages = [];
+    this.modalEl?.addClass('cordee-moodle-modal');
     const destinationsInvalides = new Set();
     c.empty(); c.createEl('h2', { text: 'Cours Moodle' });
-    c.createEl('p', { text: 'Chaque dossier choisi est partagé avec la cordée, sauf s’il est dans « Dossiers non partagés ». Les fichiers des ressources, dossiers et annonces Moodle sont copiés. Tes rendus et tes notes restent sur cet appareil. Récupération automatique toutes les 6 h quand Obsidian est ouvert.', cls: 'cordee-details' });
+    c.createEl('p', { text: 'Retrouve tes cours et choisis ceux à garder dans ton coffre.', cls: 'cordee-details' });
+    const aide = c.createEl('details', { cls: 'cordee-moodle-aide' });
+    aide.createEl('summary', { text: 'Récupération et partage' });
+    aide.createEl('p', { text: 'Chaque dossier choisi est partagé avec la cordée, sauf s’il est dans « Dossiers non partagés ». Les fichiers, couvertures et annonces Moodle sont copiés. Tes rendus et tes notes restent sur cet appareil. Récupération automatique toutes les 6 h quand Obsidian est ouvert.', cls: 'cordee-details' });
     const retour = c.createEl('p', { text: 'Chargement des cours…', attr: { role: 'status', 'aria-live': 'polite' } });
     try {
       const cours = await p.coursMoodle();
       if (this.ferme || m !== p.etat.moodle) return;
       retour.setText(cours.length ? '' : 'Tu n’as aucun cours Moodle pour le moment.');
       const noms = cours.map((v) => nomMoodle(v.shortname || v.fullname));
+      const cartes = [], apercus = [];
+      const compteur = c.createEl('p', { cls: 'cordee-moodle-compteur', attr: { role: 'status', 'aria-live': 'polite' } });
+      const normaliser = (texte) => texte.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+      let recherche = '';
+      const filtrer = () => {
+        let visibles = 0;
+        for (const carte of cartes) { carte.bloc.hidden = !carte.recherche.includes(recherche); if (!carte.bloc.hidden) visibles++; }
+        const selectionnes = cours.filter((v) => m.selections[v.id]?.copier).length;
+        compteur.setText(`${visibles} cours · ${selectionnes} ${selectionnes === 1 ? 'sélectionné' : 'sélectionnés'}`);
+      };
+      new O.Setting(c).setName('Rechercher un cours').addText((t) => t.setPlaceholder('Nom, matière…').onChange((v) => { recherche = normaliser(v.trim()); filtrer(); }));
+      const grille = c.createEl('div', { cls: 'cordee-moodle-grille' });
       for (const coursActuel of cours) {
         const nom = nomMoodle(coursActuel.shortname || coursActuel.fullname);
         const defaut = 'Moodle/' + nom + (noms.filter((v) => v.toLowerCase() === nom.toLowerCase()).length > 1 ? ` (${nomMoodle(coursActuel.id)})` : '');
         const choix = m.selections[coursActuel.id] || (m.selections[coursActuel.id] = { copier: false, dossier: defaut });
-        const bloc = c.createEl('div', { cls: 'cordee-moodle-cours' });
-        bloc.createEl('h3', { text: coursActuel.fullname || coursActuel.shortname });
-        const label = bloc.createEl('label');
+        const bloc = grille.createEl('article', { cls: 'cordee-moodle-carte' });
+        const visuel = bloc.createEl('div', { cls: 'cordee-moodle-visuel' });
+        const repli = visuel.createEl('span', { text: nom.slice(0, 3).toUpperCase(), cls: 'cordee-moodle-repli', attr: { 'aria-hidden': 'true' } });
+        const couverture = imageCoursMoodle(coursActuel, choix.dossier);
+        if (couverture) apercus.push({ couverture, visuel, repli });
+        const contenu = bloc.createEl('div', { cls: 'cordee-moodle-carte-contenu' });
+        contenu.createEl('span', { text: nom, cls: 'cordee-moodle-code' });
+        contenu.createEl('h3', { text: texteMoodle(coursActuel.fullname || coursActuel.shortname) });
+        const description = texteMoodle(coursActuel.summary || '').replace(/\s+/g, ' ').trim();
+        if (description) contenu.createEl('p', { text: description.slice(0, 180) + (description.length > 180 ? '…' : ''), cls: 'cordee-moodle-description' });
+        const label = contenu.createEl('label', { cls: 'cordee-moodle-selection' });
         const caseCopier = label.createEl('input', { attr: { type: 'checkbox', 'aria-label': `Copier dans le coffre : ${nom}` } });
         caseCopier.checked = !!choix.copier;
         label.createEl('span', { text: ' Copier dans le coffre' });
-        caseCopier.onchange = async () => { if (m !== p.etat.moodle) return; choix.copier = caseCopier.checked; await p.saveData(p.etat); };
-        new O.Setting(bloc).setName(`Dossier de destination · ${nom}`).addText((t) => t.setValue(choix.dossier).onChange(async (v) => {
+        bloc.setAttribute('data-selectionne', String(!!choix.copier));
+        caseCopier.onchange = async () => { if (m !== p.etat.moodle) return; choix.copier = caseCopier.checked; bloc.setAttribute('data-selectionne', String(choix.copier)); filtrer(); await p.saveData(p.etat); };
+        const details = contenu.createEl('details', { cls: 'cordee-moodle-destination' });
+        details.createEl('summary', { text: 'Dossier de destination' });
+        new O.Setting(details).setName(`Dossier de destination · ${nom}`).addText((t) => t.setValue(choix.dossier).onChange(async (v) => {
           try {
             const dossier = dossierMoodle(v);
             if (dansConfiguration(dossier, p.app.vault.configDir)) throw new Error('Choisis un dossier en dehors de la configuration d’Obsidian.');
@@ -3130,17 +3213,54 @@ if (O) CoursMoodleModal = class extends O.Modal {
             choix.dossier = dossier; destinationsInvalides.delete(coursActuel.id); await p.saveData(p.etat); retour.setText(`Destination : ${dossier}`);
           } catch (e) { destinationsInvalides.add(coursActuel.id); retour.setText(e.message); }
         }));
+        let ouvrir;
+        new O.Setting(contenu).addButton((b) => { ouvrir = b; b.setButtonText('Ouvrir le cours').onClick(() => {
+          if (m !== p.etat.moodle) return;
+          const chemin = m.index[coursActuel.id]?.chemin;
+          if (chemin && p.trouverMoodle(chemin)) p.app.workspace.openLinkText(chemin, '');
+        }); });
+        cartes.push({ bloc, recherche: normaliser(`${nom} ${texteMoodle(coursActuel.fullname || '')} ${description}`), ouvrir, id: coursActuel.id });
       }
-      boutonCordee(c, 'Récupérer maintenant', async () => {
+      const actualiserCartes = () => {
+        for (const carte of cartes) {
+          const chemin = m.index[carte.id]?.chemin;
+          carte.ouvrir.setDisabled(!(chemin && p.trouverMoodle(chemin)));
+        }
+        filtrer();
+      };
+      actualiserCartes();
+      const actions = c.createEl('div', { cls: 'cordee-moodle-actions' });
+      boutonCordee(actions, 'Récupérer maintenant', async () => {
         if (m !== p.etat.moodle) { retour.setText('Rouvre les cours après ta reconnexion à Moodle.'); return; }
         if ([...destinationsInvalides].some((id) => m.selections[id]?.copier)) { retour.setText('Corrige le dossier de destination avant de récupérer les fichiers.'); return; }
         retour.setText('Récupération en cours…');
-        try { const n = await p.recupererMoodle(); retour.setText((n ? `${n} fichier(s) récupéré(s).` : 'Tes fichiers Moodle sont à jour.') + ' ' + (m.avertissements || []).join(' ')); }
+        try { const n = await p.recupererMoodle(); if (this.ferme || m !== p.etat.moodle) return; actualiserCartes(); retour.setText((n ? `${n} fichier(s) récupéré(s).` : 'Tes fichiers Moodle sont à jour.') + ' ' + (m.avertissements || []).join(' ')); }
         catch (e) { retour.setText(e.message); }
       }, { cls: 'cordee-bouton-principal' });
+      // Trois téléchargements au plus ; aucune adresse contenant le jeton n’entre dans le DOM.
+      let prochain = 0;
+      await Promise.all(Array.from({ length: Math.min(3, apercus.length) }, async () => {
+        while (prochain < apercus.length && !this.ferme && m === p.etat.moodle) {
+          const { couverture, visuel, repli } = apercus[prochain++];
+          try {
+            const avant = m.fichiers[couverture.cle], local = avant && p.trouverMoodle(avant.chemin);
+            let buf, type;
+            if (local instanceof O.TFile && !doitTelechargerMoodle(couverture, avant)) {
+              buf = await p.app.vault.readBinary(local); type = typeImageMoodle(buf);
+            }
+            if (!type) ({ buf, type } = await p.telechargerImageMoodle(couverture, m));
+            if (this.ferme || m !== p.etat.moodle) return;
+            const url = URL.createObjectURL(new Blob([buf], { type }));
+            this.objetsImages.push(url);
+            const image = visuel.createEl('img', { attr: { src: url, alt: '', loading: 'lazy' } });
+            repli.hidden = true;
+            image.onerror = () => { image.hidden = true; repli.hidden = false; };
+          } catch { /* Un visuel indisponible laisse le nom du cours visible. */ }
+        }
+      }));
     } catch (e) { retour.setText(e.message + ' Ouvre Réglages → Cordée → Moodle pour te connecter.'); }
   }
-  onClose() { this.ferme = true; this.contentEl.empty(); }
+  onClose() { this.ferme = true; for (const url of this.objetsImages || []) URL.revokeObjectURL(url); this.objetsImages = []; this.contentEl.empty(); }
 };
 
 let NotesMoodleModal;
@@ -3176,5 +3296,5 @@ module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
 module.exports.interne = { lireCalendriersPartages, modifierCalendriersPartages, get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, arriveesPresence, derniereActivite, resumePresence, afficherBarrePresence, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
 Object.assign(module.exports.interne, { lireAsc, lireKicad, calculerExpressionGeii, calculerBlocGeii, notationIngenieurGeii, estTexte });
-Object.assign(module.exports.interne, { nomMoodle, dossierMoodle, siteMoodle, lienConnexionMoodle, jetonDepuisLienMoodle, fichiersMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, get CoursMoodleModal() { return CoursMoodleModal; } });
+Object.assign(module.exports.interne, { nomMoodle, dossierMoodle, siteMoodle, lienConnexionMoodle, jetonDepuisLienMoodle, fichiersMoodle, imageCoursMoodle, typeImageMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, get CoursMoodleModal() { return CoursMoodleModal; } });
 Object.assign(module.exports.interne, { markdownMoodle, devoirMoodle, noteAnnoncesMoodle, get NotesMoodleModal() { return NotesMoodleModal; } });

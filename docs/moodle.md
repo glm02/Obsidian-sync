@@ -24,6 +24,14 @@ Si les préférences proposent une clé pour **Moodle mobile web service**, elle
 
 Si seule la section **RSS** apparaît, utilise le parcours par navigateur ci-dessus.
 
+## Images et présentation des cours
+
+À partir de la version 0.4.3, **Cours Moodle** présente les vignettes officielles lorsqu’elles sont disponibles, le titre et un court résumé. Le champ de recherche filtre les cours par nom ou matière, même sans saisir les accents. Les réglages de destination restent accessibles sous chaque carte. **Ouvrir le cours** ouvre la note d’index après une récupération réussie.
+
+**Récupérer maintenant** copie aussi la couverture des cours sélectionnés dans leur dossier `_Médias/`. La note `Cours.md` affiche la couverture, la description du cours, les liens vers les fichiers et un aperçu des ressources images. Les modifications locales restent protégées par une copie distincte.
+
+Les couvertures PNG, JPEG, GIF et WebP de moins de 5 Mo sont acceptées après vérification de leurs octets. Les vignettes affichées avant la sélection ne créent aucun fichier dans le coffre. Une couverture absente ou inaccessible laisse le titre du cours visible et ne bloque pas la récupération des documents.
+
 ## Limites
 
 Le site doit autoriser le service mobile et l’authentification par navigateur. Il peut imposer des autorisations propres au compte ou forcer l’ouverture de son application officielle ; ces restrictions nécessitent une adaptation ou l’intervention de son administrateur. Les tests de Cordée simulent le retour et les appels API ; ils ne remplacent pas une connexion avec un compte universitaire réel.
