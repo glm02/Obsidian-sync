@@ -10,9 +10,24 @@ function charger(etat, navigateur = {}) {
     enfants: [],
     style: {}, value: '', scrollTop: 0, scrollLeft: 0,
     addClass(cls) { this.classes = [...(this.classes || []), cls]; },
-    appendChild(enfant) { this.enfants.push(enfant); return enfant; },
+    get children() { return this.enfants; },
+    appendChild(enfant) { return this.insertBefore(enfant, null); },
+    insertBefore(enfant, reference) {
+      if (enfant === reference) return enfant;
+      if (enfant.parentElement) enfant.parentElement.enfants = enfant.parentElement.enfants.filter((e) => e !== enfant);
+      const index = reference ? this.enfants.indexOf(reference) : this.enfants.length;
+      this.enfants.splice(index, 0, enfant); enfant.parentElement = this; return enfant;
+    },
+    remove() {
+      this.empty();
+      if (rendu.boutons.get(this.labelBouton) === this.actionBouton) rendu.boutons.delete(this.labelBouton);
+      rendu.elements = rendu.elements.filter((e) => e !== this);
+      if (this.parentElement) this.parentElement.enfants = this.parentElement.enfants.filter((e) => e !== this);
+      this.parentElement = null;
+    },
     get ownerDocument() { return { createElementNS: (_, tag) => { const enfant = container(false); enfant.tag = tag; enfant.attrs = {}; rendu.elements.push(enfant); return enfant; } }; },
     empty() {
+      this.vidages = (this.vidages || 0) + 1;
       const descendants = new Set();
       const ajouter = (node) => { descendants.add(node); node.enfants.forEach(ajouter); };
       this.enfants.forEach(ajouter); this.enfants = [];
@@ -27,9 +42,10 @@ function charger(etat, navigateur = {}) {
       this.actionBouton = () => !this.disabled && this.action(); rendu.boutons.set(this.labelBouton, this.actionBouton);
     },
     setText(text) { this.textContent = text; rendu.textes.push(text); this.enregistrerBouton(); },
+    getAttribute(nom) { return this.attrs.attr?.[nom] ?? null; },
     setAttribute(nom, valeur) { this.attrs.attr ||= {}; this.attrs.attr[nom] = valeur; this.enregistrerBouton(); },
     replaceWith() { rendu.elements = rendu.elements.filter((element) => element !== this); },
-    createEl(tag, attrs = {}) { const enfant = container(false); enfant.tag = tag; enfant.attrs = attrs; enfant.textContent = attrs.text || ''; if (attrs.text) rendu.textes.push(attrs.text); Object.defineProperty(enfant, 'onclick', { set(action) { this.action = action; this.enregistrerBouton(); } }); this.enfants.push(enfant); rendu.elements.push(enfant); return enfant; },
+    createEl(tag, attrs = {}) { const enfant = container(false); enfant.tag = tag; enfant.attrs = attrs; enfant.textContent = attrs.text || ''; if (attrs.text) rendu.textes.push(attrs.text); Object.defineProperty(enfant, 'onclick', { set(action) { this.action = action; this.enregistrerBouton(); } }); this.appendChild(enfant); rendu.elements.push(enfant); return enfant; },
   });
   const obsidian = {
     Plugin: class {
@@ -434,6 +450,86 @@ test('les membres et les changements se consultent directement dans le panneau',
   assert.ok(rendu.textes.some(text => text.includes('Membre test')));
   assert.ok(rendu.textes.some(text => text.includes('a modifié note.md')));
   assert.ok(rendu.boutons.has('Actualiser'));
+});
+
+test('actualiser en arrière-plan conserve les cartes, les membres et le défilement', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST }); await plugin.onload();
+  const info = { ...INFO_TEST, changements: [{ rev: 1, auteurId: 'm1', auteur: 'Membre test', chemin: 'note.md', le: 1700000000000 }] };
+  plugin.moteur.api = async () => ({ json: async () => info });
+  await plugin.ruban.callback();
+  const t = rendu.modal.tableau, cartes = [...t.zone.children], membres = [...t.membresEl.children];
+  t.zone.scrollTop = 64;
+  const vidages = t.zone.vidages;
+  const attente = Promise.withResolvers();
+  plugin.moteur.api = async () => ({ json: () => attente.promise });
+  const actualisation = t.charger();
+  assert.deepEqual(t.zone.children, cartes, 'aucun écran de chargement pendant le réseau');
+  assert.equal(t.zone.vidages, vidages);
+  attente.resolve(info); await actualisation;
+  assert.deepEqual(t.zone.children, cartes, 'les nœuds inchangés gardent leur identité');
+  assert.deepEqual(t.membresEl.children, membres);
+  assert.equal(t.zone.scrollTop, 64);
+  const textes = rendu.textes.length;
+  plugin.afficher(); plugin.afficher();
+  assert.equal(rendu.textes.length, textes, 'un statut identique ne réécrit aucun texte du panneau');
+  plugin.moteur.signaler('synchro'); plugin.moteur.signaler('ok');
+  assert.deepEqual(t.zone.children, cartes);
+  assert.deepEqual(t.membresEl.children, membres);
+});
+
+test('les nouvelles révisions insèrent seulement leurs cartes et les filtres gardent les boutons membres', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST }); await plugin.onload();
+  const premiere = { rev: 1, auteurId: 'm1', auteur: 'Membre test', chemin: 'note.md', le: 1700000000000 };
+  let changements = [premiere];
+  plugin.moteur.api = async (_, route) => ({ json: async () => ({ ...INFO_TEST, changements: route.includes('auteur=') ? [] : changements }) });
+  await plugin.ruban.callback();
+  const t = rendu.modal.tableau, carte = t.zone.children[0], membres = [...t.membresEl.children];
+  changements = [{ ...premiere, rev: 2, chemin: 'autre.md' }, premiere];
+  await t.charger();
+  assert.equal(t.zone.children.length, 2);
+  assert.equal(t.zone.children[1], carte);
+  assert.deepEqual(t.membresEl.children, membres);
+  assert.equal(t.comptes.get('m1'), 2);
+  await rendu.boutons.get('Voir les changements de Membre test')();
+  assert.deepEqual(t.membresEl.children, membres, 'le bouton utilisé pour filtrer reste en place');
+  assert.equal(membres[1].getAttribute('aria-pressed'), 'true');
+  assert.equal(t.zone.children[0].textContent, 'Aucun changement récent pour ce membre.');
+  await rendu.boutons.get('Tous')();
+  assert.equal(t.zone.children.length, 2);
+  assert.equal(membres[0].getAttribute('aria-pressed'), 'true');
+  changements = [premiere]; await t.charger();
+  assert.equal(t.zone.children.length, 1);
+  assert.equal(t.zone.children[0].getAttribute('data-revision'), '1');
+});
+
+test('changer de note met la présence à jour sans recharger l’activité', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST }); await plugin.onload();
+  plugin.presence = [{ id: 'm1', nom: 'Membre test', chemin: 'avant.md' }];
+  let appels = 0;
+  plugin.moteur.api = async () => { appels++; return { json: async () => ({ ...INFO_TEST, changements: [] }) }; };
+  await plugin.ruban.callback();
+  const t = rendu.modal.tableau, membres = [...t.membresEl.children];
+  plugin.presence = [{ id: 'm1', nom: 'Membre test', chemin: 'apres.md' }];
+  plugin.afficher(); await new Promise(setImmediate);
+  assert.equal(appels, 1);
+  assert.deepEqual(t.membresEl.children, membres);
+  assert.equal(t.lignesPresence[0].statut.textContent, 'en ligne · sur apres.md');
+});
+
+test('une erreur d’actualisation laisse l’activité consultable puis permet de réessayer', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST }); await plugin.onload();
+  const info = { ...INFO_TEST, changements: [{ rev: 1, auteurId: 'm1', auteur: 'Membre test', chemin: 'note.md', le: 1700000000000 }] };
+  plugin.moteur.api = async () => ({ json: async () => info });
+  await plugin.ruban.callback();
+  const t = rendu.modal.tableau, carte = t.zone.children[0];
+  plugin.moteur.api = async () => { throw Error('hors ligne'); };
+  await t.charger();
+  assert.equal(t.zone.children[0], carte);
+  assert.match(t.information.textContent, /Actualisation impossible/);
+  plugin.moteur.api = async () => ({ json: async () => info });
+  await t.charger();
+  assert.equal(t.zone.children[0], carte);
+  assert.match(t.information.textContent, /40 changements maximum/);
 });
 
 test('un dossier de configuration personnalisé est exclu des envois et des écritures distantes', async () => {

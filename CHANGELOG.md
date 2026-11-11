@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.6
+
+- **Panneau sans saccades** : l’actualisation en arrière-plan conserve l’activité affichée pendant la récupération. Les cartes et boutons inchangés sont réutilisés, y compris lors du filtrage ; le panneau ne se vide plus brièvement et ne perd plus le focus sur ces éléments.
+- La présence se met à jour sur place. Un membre qui change de note ne provoque plus le rechargement de l’activité, et les textes identiques ne sont plus réécrits à chaque statut de synchronisation.
+- La ligne de statut garde une hauteur stable pendant les synchronisations. En cas d’erreur d’actualisation, l’activité précédente reste consultable et le bouton Actualiser permet de réessayer.
+
 ## 0.4.5
 
 - **Synchronisation plus rapide** : les fichiers enregistrés partent après 200 ms, sans attendre une pause dans la frappe. Les changements successifs ne repoussent plus le premier envoi.

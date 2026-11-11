@@ -427,7 +427,7 @@ class Moteur {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.5';
+const VERSION = '0.4.6';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -1394,19 +1394,24 @@ function afficherBarrePresence(barre, texte, noms) {
   }
 }
 
-function ajouterPresenceMembre(tableau, identite, membre) {
-  const statut = identite.createEl('span', { cls: 'cordee-presence-membre' });
-  tableau.lignesPresence.push({ statut, membre });
+function texteSiChange(el, texte) { if (el.textContent !== texte) el.setText(texte); }
+function attributSiChange(el, nom, valeur) { if (el.getAttribute(nom) !== valeur) el.setAttribute(nom, valeur); }
+
+// Conserver les lignes inchangées évite de perdre le focus et de faire s'effondrer le panneau.
+function reconcilierListe(zone, elements) {
+  const gardes = new Set(elements);
+  for (const enfant of [...zone.children]) if (!gardes.has(enfant)) enfant.remove();
+  elements.forEach((el, i) => { if (zone.children[i] !== el) zone.insertBefore(el, zone.children[i] || null); });
 }
 
 function rafraichirPresenceTableau(tableau) {
   const presence = tableau.plugin.presence || [];
   for (const { statut, membre } of tableau.lignesPresence || []) {
     const ici = presence.find((p) => p.id === membre.id);
-    statut.setAttribute('data-en-ligne', String(!!ici));
-    statut.setText(ici ? `en ligne${ici.chemin ? ` · sur ${nomFichier(ici.chemin)}` : ''}` : derniereActivite(membre.vu_le));
+    attributSiChange(statut, 'data-en-ligne', String(!!ici));
+    texteSiChange(statut, ici ? `en ligne${ici.chemin ? ` · sur ${nomFichier(ici.chemin)}` : ''}` : derniereActivite(membre.vu_le));
   }
-  tableau.resumePresence?.setText(resumePresence(tableau.membresPresence || [], presence, tableau.moiPresence));
+  if (tableau.resumePresence) texteSiChange(tableau.resumePresence, resumePresence(tableau.membresPresence || [], presence, tableau.moiPresence));
 }
 
 // Valeur d'attribut CSS entre guillemets : seuls le guillemet, l'antislash et les retours à la ligne gênent.
@@ -1942,12 +1947,12 @@ if (O) {
       this.desabonner = plugin.abonnerStatut(() => {
         this.afficherAVoir();
         rafraichirPresenceTableau(this);
-        // Dans le panneau latéral, l'activité suit toute seule : nouvelle révision ou présence qui change.
-        const presence = JSON.stringify(plugin.presence || []);
+        // Changer de note ne modifie que la présence, pas la liste d'activité.
+        const presence = this.signaturePresence();
         if (this.revChargee !== undefined && plugin.phase !== 'synchro' && (plugin.etat.derniereRev !== this.revChargee || presence !== this.presenceChargee)) this.charger();
-        statut.setText(plugin.titreStatut()); statut.setAttribute('data-etat', plugin.etatCourt()); pause.setText(plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
-        pause.setAttribute('aria-label', plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
-        attention.setText(plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
+        texteSiChange(statut, plugin.titreStatut()); attributSiChange(statut, 'title', plugin.titreStatut()); attributSiChange(statut, 'data-etat', plugin.etatCourt()); texteSiChange(pause, plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
+        attributSiChange(pause, 'aria-label', plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
+        texteSiChange(attention, plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
       });
       const section = tableau.createEl('div', { cls: 'cordee-section-titre' });
       section.createEl('h3', { text: 'Les membres' }); this.nombre = section.createEl('span', { cls: 'cordee-details' });
@@ -1960,6 +1965,7 @@ if (O) {
       this.chargement = this.charger();
     }
     actif() { return !this.detruit && !this.plugin.arret && this.plugin.etat.coffreId === this.coffreId && this.plugin.etat.jeton === this.jeton; }
+    signaturePresence() { return JSON.stringify((this.plugin.presence || []).map((p) => [p.id, p.nom])); }
     /** La journée en un coup d'œil : cours qui restent aujourd'hui et devoirs Moodle à rendre dans la semaine. */
     async afficherAujourdhui() {
       const zone = this.aujourdhuiEl, p = this.plugin;
@@ -2012,10 +2018,10 @@ if (O) {
     }
     async charger() {
       if (!this.actif()) return;
-      this.revChargee = this.plugin.etat.derniereRev; this.presenceChargee = JSON.stringify(this.plugin.presence || []);
+      this.revChargee = this.plugin.etat.derniereRev; this.presenceChargee = this.signaturePresence();
       const tour = this.tour = (this.tour || 0) + 1;
       const filtre = this.filtre;
-      this.zone.empty(); this.zone.createEl('p', { text: 'Chargement de l’activité…', cls: 'cordee-vide' });
+      if (!this.chargee) { this.zone.empty(); this.zone.createEl('p', { text: 'Chargement de l’activité…', cls: 'cordee-vide' }); }
       try {
         let info, ancien = false;
         try {
@@ -2031,30 +2037,53 @@ if (O) {
         }
         if (!this.actif() || this.tour !== tour) return;
         if (!filtre) this.comptes = info.changements.reduce((comptes, ch) => comptes.set(ch.auteurId, (comptes.get(ch.auteurId) || 0) + 1), new Map());
-        this.nombre.setText(`${info.membres.length} membre${info.membres.length > 1 ? 's' : ''}`);
+        texteSiChange(this.nombre, `${info.membres.length} membre${info.membres.length > 1 ? 's' : ''}`);
         this.membresPresence = info.membres; this.moiPresence = info.moiId; this.lignesPresence = [];
-        this.membresEl.empty();
-        const tous = boutonCordee(this.membresEl, 'Tous', () => { this.filtre = null; return this.charger(); }, { cls: 'cordee-collegue cordee-collegue-tous', attr: { 'aria-pressed': String(!filtre) } });
-        tous.createEl('span', { text: 'Toute la cordée', cls: 'cordee-details' });
-        for (const membre of info.membres) {
-          const bouton = boutonCordee(this.membresEl, '', () => { this.filtre = membre.id; return this.charger(); }, { label: `Voir les changements de ${membre.nom}`, cls: 'cordee-collegue', attr: { 'aria-pressed': String(filtre === membre.id), 'data-membre-id': membre.id || '' } });
-          bouton.disabled = !membre.id;
-          afficherAvatar(bouton, membre.nom, membre.avatar);
-          const identite = bouton.createEl('span', { cls: 'cordee-collegue-identite' });
-          identite.createEl('strong', { text: membre.nom });
-          const n = this.comptes.get(membre.id) || 0;
-          ajouterPresenceMembre(this, identite, membre);
-          identite.createEl('span', { text: membre.id ? (n ? `${n} changement${n > 1 ? 's' : ''} récent${n > 1 ? 's' : ''}` : 'Rien de récent') : 'Membre du groupe', cls: 'cordee-details' });
+        if (!this.tous) {
+          this.tous = boutonCordee(this.membresEl, 'Tous', () => { this.filtre = null; return this.charger(); }, { cls: 'cordee-collegue cordee-collegue-tous' });
+          this.tous.createEl('span', { text: 'Toute la cordée', cls: 'cordee-details' });
         }
+        attributSiChange(this.tous, 'aria-pressed', String(!filtre));
+        const membres = new Map(), elementsMembres = [this.tous];
+        for (const [i, membre] of info.membres.entries()) {
+          const cle = membre.id ? 'id:' + membre.id : 'ancien:' + i;
+          const profil = JSON.stringify([membre.nom, membre.avatar]);
+          let ligne = this.cartesMembres?.get(cle);
+          if (!ligne || ligne.profil !== profil) {
+            const bouton = boutonCordee(this.membresEl, '', () => { this.filtre = membre.id; return this.charger(); }, { label: `Voir les changements de ${membre.nom}`, cls: 'cordee-collegue', attr: { 'data-membre-id': membre.id || '' } });
+            bouton.disabled = !membre.id;
+            afficherAvatar(bouton, membre.nom, membre.avatar);
+            const identite = bouton.createEl('span', { cls: 'cordee-collegue-identite' });
+            identite.createEl('strong', { text: membre.nom });
+            ligne = { bouton, profil, statut: identite.createEl('span', { cls: 'cordee-presence-membre' }), compte: identite.createEl('span', { cls: 'cordee-details' }) };
+          }
+          ligne.membre = membre;
+          attributSiChange(ligne.bouton, 'aria-pressed', String(filtre === membre.id));
+          const n = this.comptes.get(membre.id) || 0;
+          texteSiChange(ligne.compte, membre.id ? (n ? `${n} changement${n > 1 ? 's' : ''} récent${n > 1 ? 's' : ''}` : 'Rien de récent') : 'Membre du groupe');
+          this.lignesPresence.push(ligne); membres.set(cle, ligne); elementsMembres.push(ligne.bouton);
+        }
+        reconcilierListe(this.membresEl, elementsMembres); this.cartesMembres = membres;
         rafraichirPresenceTableau(this);
         const selection = info.membres.find((m) => m.id === filtre);
-        this.titreActivite.setText(filtre ? `Changements de ${selection?.nom || 'ce membre'}` : 'Derniers changements');
-        this.information.setText(ancien ? 'Serveur ancien : mets Cordée à jour pour filtrer tous les membres et comparer les versions.' : '40 changements maximum · Clique sur un fichier pour comparer ses versions.');
+        texteSiChange(this.titreActivite, filtre ? `Changements de ${selection?.nom || 'ce membre'}` : 'Derniers changements');
+        texteSiChange(this.information, ancien ? 'Serveur ancien : mets Cordée à jour pour filtrer tous les membres et comparer les versions.' : '40 changements maximum · Clique sur un fichier pour comparer ses versions.');
         const changements = info.changements.filter((ch) => !filtre || ch.auteurId === filtre).slice(0, 40);
-        this.zone.empty();
-        if (!changements.length) this.zone.createEl('div', { text: filtre ? 'Aucun changement récent pour ce membre.' : 'Aucun changement partagé pour le moment.', cls: 'cordee-vide' });
+        const cartes = new Map(), elements = [];
+        if (!changements.length) {
+          this.videActivite ||= this.zone.createEl('div', { cls: 'cordee-vide' });
+          texteSiChange(this.videActivite, filtre ? 'Aucun changement récent pour ce membre.' : 'Aucun changement partagé pour le moment.');
+          elements.push(this.videActivite);
+        }
         const profils = new Map(info.membres.filter((m) => m.id).map((m) => [m.id, m]));
-        for (const ch of changements) {
+        for (const [i, ch] of changements.entries()) {
+          const cle = Number.isSafeInteger(ch.rev) ? 'rev:' + ch.rev : 'ancien:' + i;
+          const signature = JSON.stringify([ch, profils.get(ch.auteurId)?.avatar, ancien]);
+          const precedente = this.cartesActivite?.get(cle);
+          if (precedente?.signature === signature) {
+            texteSiChange(precedente.auteur, `${ch.auteur || 'Membre'} · ${ch.supprime ? 'a supprimé' : 'a modifié'} ${nomFichier(ch.chemin)} · ${ilYa(ch.le)}`);
+            cartes.set(cle, precedente); elements.push(precedente.carte); continue;
+          }
           const carte = boutonCordee(this.zone, '', () => new RevisionModal(this.app, this.plugin, ch.rev, profils.get(ch.auteurId)).open(), { label: `Comparer ${ch.chemin}, révision ${ch.rev}`, cls: 'cordee-fichier', attr: { 'data-revision': String(ch.rev) } });
           carte.disabled = ancien || !Number.isSafeInteger(ch.rev);
           afficherAvatar(carte, ch.auteur, profils.get(ch.auteurId)?.avatar);
@@ -2062,12 +2091,17 @@ if (O) {
           const tete = contenu.createEl('span', { cls: 'cordee-fichier-tete' });
           tete.createEl('strong', { text: nomFichier(ch.chemin), cls: 'cordee-fichier-chemin' });
           if (dossierDe(ch.chemin)) tete.createEl('span', { text: dossierDe(ch.chemin), cls: 'cordee-fichier-dossier' });
-          contenu.createEl('span', { text: `${ch.auteur || 'Membre'} · ${ch.supprime ? 'a supprimé' : 'a modifié'} ${nomFichier(ch.chemin)} · ${ilYa(ch.le)}`, cls: 'cordee-fichier-auteur', attr: { title: new Date(ch.le).toLocaleString('fr-FR') } });
+          const auteur = contenu.createEl('span', { text: `${ch.auteur || 'Membre'} · ${ch.supprime ? 'a supprimé' : 'a modifié'} ${nomFichier(ch.chemin)} · ${ilYa(ch.le)}`, cls: 'cordee-fichier-auteur', attr: { title: new Date(ch.le).toLocaleString('fr-FR') } });
           const genre = ch.type === 'dossier' ? 'dossier' : ch.supprime ? 'supprime' : ch.avantHash ? 'modifie' : 'ajoute';
           carte.createEl('span', { text: { dossier: 'Dossier', supprime: 'Supprimé', modifie: 'Modifié', ajoute: 'Ajouté' }[genre], cls: `cordee-type-changement cordee-type-${genre}` });
           carte.createEl('span', { text: '↗', cls: 'cordee-fichier-fleche', attr: { 'aria-hidden': 'true' } });
+          cartes.set(cle, { signature, carte, auteur }); elements.push(carte);
         }
-      } catch (erreur) { if (this.actif() && this.tour === tour) { this.zone.empty(); this.zone.createEl('p', { text: expliquerErreur(erreur), cls: 'cordee-vide' }); } }
+        reconcilierListe(this.zone, elements); this.cartesActivite = cartes; this.chargee = true;
+      } catch (erreur) { if (this.actif() && this.tour === tour) {
+        if (this.chargee) texteSiChange(this.information, 'Actualisation impossible : ' + expliquerErreur(erreur));
+        else { this.zone.empty(); this.zone.createEl('p', { text: expliquerErreur(erreur), cls: 'cordee-vide' }); }
+      } }
     }
     detruire() { this.detruit = true; ++this.tour; this.desabonner?.(); this.desabonnerCalendrier?.(); }
   }
