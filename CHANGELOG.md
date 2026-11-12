@@ -1,5 +1,9 @@
 # Nouveautés
 
+## 0.4.15
+
+- **Toutes les pages épurées** : réglages (options du coffre repliées), semaine (créneaux courts qui ne se chevauchent plus), fenêtres Moodle, historique, profil, invitation et fiche membre. Moins de texte, une action principale par page, lisible sur téléphone.
+
 ## 0.4.14
 
 - **Jauge de stockage** dans le panneau : remplissage du disque du serveur, place libre et poids du coffre. Verte, orange à 75 %, rouge à 90 %. Demande le serveur à jour (route `/stockage`).

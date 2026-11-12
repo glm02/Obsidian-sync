@@ -3,7 +3,7 @@
  * Source : le code de plugin/main.js et CHANGELOG.md. À mettre à jour à chaque version
  * (la version doit suivre manifest.json, sinon le site annonce une version qui n'existe pas).
  */
-export const VERSION_EXTENSION = "0.4.14";
+export const VERSION_EXTENSION = "0.4.15";
 
 export type Fonction = { titre: string; texte: string };
 export type Groupe = { id: string; titre: string; resume: string; fonctions: Fonction[] };
@@ -106,7 +106,7 @@ export type Version = { version: string; titre: string; points: string[] };
 
 export const versions: Version[] = [
   {
-    version: "0.4.14",
+    version: "0.4.15",
     titre: "Plus rapide, plus clair, plus fiable",
     points: [
       "Jauge de stockage du serveur dans le panneau : verte, orange puis rouge quand le disque se remplit.",
