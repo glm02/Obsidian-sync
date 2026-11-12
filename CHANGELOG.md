@@ -1,5 +1,12 @@
 # Nouveautés
 
+## 0.4.16
+
+- **Clic droit sur un dossier** : « Ne pas partager ce dossier » ou « Partager à nouveau ce dossier ».
+- **Résumé d’absence** après la première synchro : « Pendant ton absence : Paulo a modifié 5 notes ».
+- **Filtre** dans « Derniers changements », sans tenir compte des majuscules ni des accents.
+- **Menu rapide** au clic sur « Cordée » dans la barre du bas : synchroniser, pause, panneau, semaine, prochaine note à voir.
+
 ## 0.4.15
 
 - **Toutes les pages épurées** : réglages (options du coffre repliées), semaine (créneaux courts qui ne se chevauchent plus), fenêtres Moodle, historique, profil, invitation et fiche membre. Moins de texte, une action principale par page, lisible sur téléphone.
