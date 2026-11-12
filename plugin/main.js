@@ -467,7 +467,7 @@ async function enParallele(elements, limite, travail) {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.9';
+const VERSION = '0.4.10';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -730,21 +730,22 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     O.addIcon('cordee-logo', ICONE_CORDEE);
     this.addRibbonIcon('calendar-days', 'Cordée — la semaine', () => this.ouvrirSemaine());
     this.addRibbonIcon('cordee-logo', 'Cordée — ouvrir le partage', () => this.ouvrirPanneau());
-    this.addCommand({ id: 'ouvrir', name: 'Ouvrir le panneau de partage', callback: () => this.ouvrirPanneau() });
-    this.addCommand({ id: 'historique', name: 'Historique de cette note (versions, restauration)', callback: () => { const f = this.app.workspace.getActiveFile?.(); if (f) new HistoriqueModal(this.app, this, f.path).open(); else new O.Notice('Ouvre d’abord une note.'); } });
-    this.addCommand({ id: 'semaine', name: 'Ouvrir la semaine (emploi du temps, Moodle, agenda de la cordée)', callback: () => this.ouvrirSemaine() });
+    this.addCommand({ id: 'ouvrir', name: 'Ouvrir le panneau', callback: () => this.ouvrirPanneau() });
+    this.addCommand({ id: 'historique', name: 'Historique de cette note', callback: () => { const f = this.app.workspace.getActiveFile?.(); if (f) new HistoriqueModal(this.app, this, f.path).open(); else new O.Notice('Ouvre d’abord une note.'); } });
+    this.addCommand({ id: 'semaine', name: 'Ouvrir la semaine', callback: () => this.ouvrirSemaine() });
     this.addCommand({ id: 'cours-moodle', name: 'Cours Moodle', callback: () => new CoursMoodleModal(this.app, this).open() });
-    this.addCommand({ id: 'notes-moodle', name: 'Mes notes Moodle (sur cet appareil)', callback: () => new NotesMoodleModal(this.app, this).open() });
-    this.addCommand({ id: 'creneau', name: 'Ajouter un créneau à l’agenda de la cordée', callback: () => new CreneauModal(this.app, this).open() });
-    this.addCommand({ id: 'presence', name: 'Montrer ou masquer ma présence (note et dernière activité)', callback: () => this.basculerPresence() });
-    this.addCommand({ id: 'prevenir-connexions', name: 'Prévenir quand un ami se connecte (activer/désactiver)', callback: () => this.basculerNotificationsPresence() });
+    this.addCommand({ id: 'notes-moodle', name: 'Mes notes Moodle', callback: () => new NotesMoodleModal(this.app, this).open() });
+    this.addCommand({ id: 'creneau', name: 'Ajouter un créneau', callback: () => new CreneauModal(this.app, this).open() });
+    this.addCommand({ id: 'presence', name: 'Montrer ou masquer ma présence', callback: () => this.basculerPresence() });
+    this.addCommand({ id: 'prevenir-connexions', name: 'Prévenir quand un ami se connecte', callback: () => this.basculerNotificationsPresence() });
     this.addCommand({ id: 'synchroniser', name: 'Synchroniser maintenant', callback: () => this.lancer({ forcer: true }) });
-    this.addCommand({ id: 'confirmer-suppressions', name: 'Confirmer les suppressions en attente (aussi chez les amis)', callback: () => this.confirmerSuppressions() });
-    this.addCommand({ id: 'pause', name: 'Mettre en pause ou reprendre la synchronisation', callback: () => this.mettreEnPause(!this.etat.enPause) });
-    this.addCommand({ id: 'inviter', name: "Créer une invitation pour un ami", callback: () => this.inviter() });
+    this.addCommand({ id: 'confirmer-suppressions', name: 'Confirmer les suppressions en attente', callback: () => this.confirmerSuppressions() });
+    this.addCommand({ id: 'pause', name: 'Pause / reprise', callback: () => this.mettreEnPause(!this.etat.enPause) });
+    this.addCommand({ id: 'inviter', name: 'Inviter un ami', callback: () => this.inviter() });
     this.addCommand({ id: 'activite', name: 'Voir qui a modifié quoi', callback: () => new ActiviteModal(this.app, this).open() });
-    this.addCommand({ id: 'marquer-vu', name: 'Marquer les modifications de cette note comme vues', callback: () => { const f = this.app.workspace.getActiveFile?.(); if (f) this.marquerVu(f.path); } });
+    this.addCommand({ id: 'marquer-vu', name: 'Marquer cette note comme vue', callback: () => { const f = this.app.workspace.getActiveFile?.(); if (f) this.marquerVu(f.path); } });
     this.addCommand({ id: 'tout-vu', name: 'Tout marquer comme vu', callback: () => this.toutMarquerVu() });
+    this.addCommand({ id: 'prochain-a-voir', name: 'Ouvrir la prochaine note à voir', callback: () => this.ouvrirProchainAVoir() });
     this.registerObsidianProtocolHandler('cordee', (params) => {
       const invitation = invitationValide(new URLSearchParams({ serveur: params.serveur || '', code: params.code || '' }));
       if (!invitation) { new O.Notice('Ce lien Cordée est incomplet. Demande une nouvelle invitation.'); return; }
@@ -762,6 +763,10 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
       // Ouvrir la note retire le point de l'explorateur ; les lignes restent surlignées jusqu'à « Vu ».
       this.registerEvent(this.app.workspace.on('file-open', (f) => { const e = f && this.etat.aVoir[f.path]; if (e && !e.ouvert) { e.ouvert = true; this.rafraichirMarques(); } }));
       this.registerEvent(this.app.workspace.on('file-open', (f) => this.annoncerPresence(f?.path ?? null)));
+      this.registerEvent(this.app.workspace.on('file-menu', (menu, f) => {
+        if (!this.connecte() || !(f instanceof O.TFile)) return;
+        menu.addItem((i) => i.setTitle('Historique Cordée').setIcon('history').onClick(() => new HistoriqueModal(this.app, this, f.path).open()));
+      }));
       this.registerInterval(window.setInterval(() => this.annoncerPresence(this.app.workspace.getActiveFile?.()?.path ?? null), 45_000));
       this.registerEvent(this.app.workspace.on('file-menu', (menu, f) => {
         if (!this.connecte() || !f || (O.TFolder && f instanceof O.TFolder)) return;
@@ -1087,6 +1092,13 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
   }
 
   /** Ouvre la note et place le curseur sur la première ligne modifiée par l'ami. */
+  /** La modification la plus récente d'abord : on suit le fil sans passer par le panneau. */
+  async ouvrirProchainAVoir() {
+    const [suivant] = Object.entries(this.etat.aVoir || {}).sort((a, b) => (b[1]?.le || 0) - (a[1]?.le || 0));
+    if (!suivant) { new O.Notice('Cordée : rien à voir.'); return; }
+    try { await this.ouvrirModif(suivant[0]); } catch { new O.Notice(`Impossible d’ouvrir ${suivant[0]}.`); }
+  }
+
   async ouvrirModif(chemin) {
     const e = this.etat.aVoir[chemin];
     await this.app.workspace.openLinkText(chemin, '', false);
@@ -1121,7 +1133,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
         else if (quoi === 'erreur') this.signalerErreur(a, 'synchro');
         else if (quoi === 'conflit') new O.Notice(`Cordée : ${a} modifié aussi par ${b || 'un ami'}. Les deux versions sont gardées, vérifie la note.`, 10000);
         else if (quoi === 'garde-fou') this.annoncerGardeFou(a, b);
-        else if (quoi === 'dossiers-indisponibles') new O.Notice('Cordée : ce serveur doit être mis à jour pour partager les dossiers vides. Les notes continuent à se synchroniser.', 10000);
+        else if (quoi === 'dossiers-indisponibles') new O.Notice('Cordée : serveur à mettre à jour pour les dossiers vides. Les notes se synchronisent.', 10000);
         else if (quoi === 'dossier-conserve') new O.Notice(`Cordée : ${a} a été conservé car il contient encore des fichiers locaux.`, 10000);
         else if (quoi === 'dossier-en-attente') this.dossiersEnAttente.add(a);
         else if (quoi === 'dossier-ok') this.dossiersEnAttente.delete(a);
@@ -1186,7 +1198,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
       const info = await (await this.moteur.api('GET', `/api/coffres/${this.etat.coffreId}`)).json();
       const retard = (info.membres || []).filter((m) => m.id !== info.moiId && (!m.version || comparerVersions(m.version, VERSION_DOSSIERS) < 0)).map((m) => m.nom);
       const cle = retard.join('|');
-      if (retard.length && cle !== this.dernierRetardVersions) new O.Notice(`Cordée : à mettre à jour chez ${retard.join(', ')} (version d’avant les dossiers, ou inconnue). Tant que ce n’est pas fait, les fichiers arrivent mais les dossiers créés ou supprimés ici ne se mettent pas à jour chez eux.`, 20000);
+      if (retard.length && cle !== this.dernierRetardVersions) new O.Notice(`Cordée : ${retard.join(', ')} doit mettre à jour l’extension (les dossiers ne se synchronisent pas chez lui).`, 20000);
       this.dernierRetardVersions = cle;
     } catch { /* simple information : ne doit jamais gêner la synchronisation */ }
   }
@@ -2056,6 +2068,11 @@ if (O) {
         const t = b.createEl('span', { cls: 'cordee-evenement-texte' });
         t.createEl('strong', { text: e.titre });
         if (e.lieu) t.createEl('span', { text: e.lieu, cls: 'cordee-details' });
+        if (!estEcheance(e) && !e.journee) {
+          const avant = e.debut - maintenant;
+          const bientot = avant <= 0 ? 'En cours' : avant < 3 * 3600_000 ? `Dans ${avant < 3600_000 ? Math.ceil(avant / 60_000) + ' min' : Math.floor(avant / 3600_000) + ' h ' + String(Math.floor((avant % 3600_000) / 60_000)).padStart(2, '0')}` : '';
+          if (bientot) t.createEl('span', { text: bientot, cls: 'cordee-evenement-bientot' });
+        }
       }
     }
     /** Notes modifiées par les amis depuis ta dernière visite : un clic ouvre la note sur la modification. */

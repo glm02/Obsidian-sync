@@ -1,5 +1,13 @@
 # Nouveautés
 
+## 0.4.10
+
+- **Barre latérale plus compacte** : texte et icônes plus petits, titres de section discrets.
+- **Aujourd’hui** indique « En cours » ou « Dans 25 min » sous chaque cours.
+- **Nouvelle commande** « Ouvrir la prochaine note à voir » : suit les modifications sans passer par le panneau.
+- **Clic droit sur un fichier** → « Historique Cordée ».
+- Noms de commandes et notifications raccourcis.
+
 ## 0.4.9
 
 - **Panneau en accordéon** : Aujourd’hui, À voir, Les membres et Derniers changements s’ouvrent et se referment d’un clic ; l’état est retenu sur l’appareil.

@@ -354,3 +354,16 @@ textarea.cordee-geii-code:focus { outline: 1px solid var(--interactive-accent); 
 
 /* Barre d'état d'Obsidian : espace avant « en ligne ». */
 .cordee-presence-barre { margin-inline-start: var(--size-4-1); }
+
+/* ---------- 0.4.10 : barre latérale plus compacte ---------- */
+.cordee-vue .cordee-tableau { font-size: var(--font-ui-small); gap: var(--size-4-2); }
+.cordee-vue .cordee-tableau .cordee-titre { font-size: var(--font-ui-medium); }
+.cordee-vue .cordee-tableau .cordee-details, .cordee-vue .cordee-tableau .cordee-presence-resume { font-size: var(--font-ui-smaller); }
+.cordee-vue .cordee-tableau .cordee-bouton { font-size: var(--font-ui-small); min-height: 28px; }
+.cordee-vue .cordee-bouton.cordee-bouton-icone { width: 28px; min-width: 28px; height: 28px; }
+.cordee-vue .cordee-bouton-icone svg { width: 15px; height: 15px; }
+.cordee-vue .cordee-accordeon > summary { padding: var(--size-4-1) 0; }
+.cordee-vue .cordee-accordeon > summary h3 { font-size: var(--font-ui-small); text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
+.cordee-vue .cordee-tableau-etat { padding: var(--size-4-1) var(--size-4-2); }
+.cordee-vue .cordee-collegues { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+.cordee-evenement-bientot { color: var(--text-accent); font-size: var(--font-ui-smaller); font-weight: var(--font-medium); }
