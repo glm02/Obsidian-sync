@@ -236,6 +236,26 @@ export function creerServeur(opts: Options) {
     return { changement: exposerChangement(changement), avant: textes[0], apres: textes[1], raison: null };
   }
 
+  // Parcourir des milliers de fichiers coûte : la taille d'un coffre est gardée une minute.
+  const taillesCoffres = new Map<string, { octets: number; le: number }>();
+  function tailleCoffre(coffreId: string): number {
+    const cache = taillesCoffres.get(coffreId);
+    if (cache && maintenant() - cache.le < 60_000) return cache.octets;
+    let octets = 0;
+    const parcourir = (dossier: string) => {
+      let entrees: fs.Dirent[] = [];
+      try { entrees = fs.readdirSync(dossier, { withFileTypes: true }); } catch { return; }
+      for (const e of entrees) {
+        const chemin = path.join(dossier, e.name);
+        if (e.isDirectory()) parcourir(chemin);
+        else if (e.isFile()) octets += fs.statSync(chemin).size;
+      }
+    };
+    parcourir(path.join(opts.dossierDonnees, 'blobs', coffreId));
+    taillesCoffres.set(coffreId, { octets, le: maintenant() });
+    return octets;
+  }
+
   function lireCorps(req: http.IncomingMessage, limite: number): Promise<Buffer> {
     return new Promise((ok, ko) => {
       const morceaux: Buffer[] = [];
@@ -320,6 +340,12 @@ export function creerServeur(opts: Options) {
         if (url.searchParams.get('revision') === '1') return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev, presence: presenceDu(coffreId, moi.id) });
         const membres = membresDuCoffre(coffreId);
         return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev, moi: moi.nom, moiId: moi.id, membres });
+      }
+
+      // Place prise par ce coffre et place libre sur le disque du serveur, pour la jauge de l'extension.
+      if (m === 'GET' && sous === '/stockage') {
+        const disque = fs.statfsSync(opts.dossierDonnees);
+        return envoyer(res, 200, { coffre: tailleCoffre(coffreId), total: disque.blocks * disque.bsize, libre: disque.bavail * disque.bsize });
       }
 
       if (m === 'PUT' && sous === '/profil') {

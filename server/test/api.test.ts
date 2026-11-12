@@ -550,3 +550,17 @@ test("historique d'une note : ses versions de la plus récente à la plus ancien
     assert.equal((await s.appel('GET', route + '/historique?chemin=..%2Fx', undefined, c.jeton)).statut, 400);
   } finally { await s.arreter(); }
 });
+
+test('le stockage donne la place prise par le coffre et la place libre du disque', async () => {
+  // Serveur à part : le limiteur de créations du serveur commun est déjà entamé par les autres tests.
+  const local = await demarrer();
+  const c = await local.appel('POST', '/api/coffres', { nom: 'Stockage', prenom: 'Alice', codeCreation: CODE });
+  const { coffreId, jeton } = c.json;
+  await ecrireVersion(local, coffreId, jeton, 'a.md', 'bonjour');
+  const s = await local.appel('GET', `/api/coffres/${coffreId}/stockage`, undefined, jeton);
+  assert.equal(s.statut, 200);
+  assert.equal(s.json.coffre, 'bonjour'.length);
+  assert.ok(s.json.total > 0 && s.json.libre > 0 && s.json.libre <= s.json.total);
+  assert.equal((await local.appel('GET', `/api/coffres/${coffreId}/stockage`)).statut, 401);
+  await local.arreter();
+});

@@ -416,7 +416,7 @@ class Moteur {
       // Sauvegarde régulière : fermer Obsidian au milieu d'un gros envoi ne fait rien repartir de zéro.
       if (faits % 20 === 0) await this.sauver();
     });
-    this.signaler('progression', 0, 0);
+    if (changes.length > 3) this.signaler('progression', 0, 0);
     const disparus = Object.keys(this.etat.bases).filter((p) => !presents.has(p) && !this.ignorer(p));
     const total = Object.keys(this.etat.bases).length;
     // Garde-fou : si la moitié du coffre disparaît d'un coup, c'est plus probablement un accident qu'un choix.
