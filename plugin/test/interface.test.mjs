@@ -52,10 +52,10 @@ function charger(etat, navigateur = {}) {
   });
   const obsidian = {
     Plugin: class {
-      constructor() { this.app = { workspace: { onLayoutReady() {} }, vault: { configDir: 'configuration', getFiles: () => [] } }; }
+      constructor() { this.app = { workspace: { onLayoutReady(callback) { rendu.layout = callback; } }, vault: { configDir: 'configuration', getFiles: () => [] } }; }
       async loadData() { return etat; }
       async saveData(data) { rendu.sauvegarde = JSON.parse(JSON.stringify(data)); }
-      addStatusBarItem() { return { setText() {} }; }
+      addStatusBarItem() { return { setText() {}, onClickEvent(action) { rendu.clicStatut = action; } }; }
       addSettingTab(tab) { this.onglet = tab; }
       addRibbonIcon(id, label, callback) { this.ruban = { id, label, callback }; }
       addCommand(commande) { rendu.commandes.set(commande.id, commande); }
@@ -1869,4 +1869,129 @@ test('les vidéos restent sur l’appareil sauf si « Partager les vidéos » es
   assert.equal(plugin.moteur.ignorer('Cours/TD.pdf'), false);
   plugin.etat.partagerVideos = true;
   assert.equal(plugin.moteur.ignorer('Cours/Séance 1.MP4'), false);
+});
+
+test('le menu des dossiers exclut puis repartage le dossier, seulement connecté', async () => {
+  const { plugin, rendu, obsidian } = charger({ ...ETAT_TEST, dossiersIgnores: 'Perso' });
+  await plugin.onload();
+  const evenements = new Map();
+  plugin.registerEvent = () => {};
+  plugin.app.vault.on = () => ({});
+  plugin.app.workspace.on = (nom, action) => { const actions = evenements.get(nom) || []; actions.push(action); evenements.set(nom, actions); return {}; };
+  for (const nom of ['annoncerPresence', 'actualiserCalendriers', 'demarrerMoodle', 'ecouter']) plugin[nom] = () => {};
+  const ordre = [];
+  const sauver = plugin.saveData.bind(plugin);
+  plugin.saveData = async e => { ordre.push('sauve'); await sauver(e); };
+  plugin.lancer = async () => {};
+  rendu.layout(); ordre.length = 0;
+  plugin.lancer = async options => { ordre.push('synchro'); assert.equal(options?.forcer, true); };
+  const dossier = Object.assign(new obsidian.TFolder(), { path: 'Cours' });
+  const lireMenu = fichier => {
+    const entrees = [];
+    const menu = { addItem(creer) { const i = { setTitle(t) { this.titre = t; return this; }, setIcon() { return this; }, onClick(action) { this.action = action; return this; } }; creer(i); entrees.push(i); } };
+    for (const action of evenements.get('file-menu')) action(menu, fichier);
+    return entrees;
+  };
+  let menu = lireMenu(dossier);
+  assert.deepEqual(menu.map(i => i.titre), ['Ne pas partager ce dossier']);
+  await menu[0].action();
+  assert.equal(rendu.sauvegarde.dossiersIgnores, 'Perso, Cours');
+  assert.deepEqual(ordre, ['sauve', 'synchro']);
+  assert.equal(plugin.moteur.ignorer('Cours/note.md'), true);
+  assert.equal(plugin.moteur.ignorer('Cours-bis/note.md'), false);
+  assert.equal(rendu.notice, 'Ce dossier n’est plus partagé.');
+  menu = lireMenu(dossier); assert.equal(menu[0].titre, 'Partager à nouveau ce dossier');
+  await menu[0].action();
+  assert.equal(plugin.etat.dossiersIgnores, 'Perso');
+  assert.equal(plugin.moteur.ignorer('Cours/note.md'), false);
+  assert.equal(rendu.notice, 'Ce dossier est à nouveau partagé.');
+  assert.ok(lireMenu(Object.assign(new obsidian.TFile(), { path: 'note.md' })).every(i => !i.titre.includes('dossier')));
+  plugin.etat.jeton = ''; assert.equal(lireMenu(dossier).length, 0);
+});
+
+test('un dossier ne change pas de partage si le réglage ne peut pas être enregistré', async () => {
+  const { plugin, rendu } = charger({ ...ETAT_TEST, dossiersIgnores: 'Perso' }); await plugin.onload();
+  plugin.saveData = async () => { throw Error('disque indisponible'); };
+  plugin.lancer = () => assert.fail('pas de synchro après un échec de sauvegarde');
+  await plugin.basculerPartageDossier('Cours');
+  assert.equal(plugin.etat.dossiersIgnores, 'Perso'); assert.equal(rendu.notice, 'Impossible de conserver ce réglage.');
+  await plugin.basculerPartageDossier('Cours, privés'); assert.equal(plugin.etat.dossiersIgnores, 'Perso');
+});
+
+test('le résumé d’absence attend une synchro réussie, compte les notes et ne revient pas', async () => {
+  const maintenant = Date.now(), precedent = maintenant - 10000;
+  const { plugin, rendu } = charger({ ...ETAT_TEST, prenom: 'toi', derniereOuverture: precedent, aVoir: {
+    'a.md': { auteurs: ['Bruno', 'Bruno'], le: maintenant - 1000 },
+    'b.md': { auteurs: ['Bruno', 'Alice'], le: maintenant - 2000 },
+    'ancien.md': { auteurs: ['Alice'], le: precedent - 1 },
+    'pendant.md': { auteurs: ['Alice'], le: maintenant + 1000 },
+  } }, { Date: class extends Date { static now() { return maintenant; } } });
+  await plugin.onload();
+  plugin.verifierVersions = () => {};
+  plugin.moteur.synchroniser = async () => { plugin.phase = 'erreur'; };
+  await plugin.lancer(); assert.equal(rendu.notices.length, 0);
+  plugin.moteur.synchroniser = async () => { plugin.phase = 'ok'; };
+  await plugin.lancer();
+  assert.deepEqual(rendu.notices, ['Pendant ton absence : Bruno a modifié 2 notes, Alice 1.']);
+  assert.equal(rendu.sauvegarde.derniereOuverture, maintenant);
+  await plugin.lancer(); assert.equal(rendu.notices.length, 1);
+  const suivant = charger(rendu.sauvegarde); await suivant.plugin.onload();
+  suivant.plugin.resumerAbsence(); assert.equal(suivant.rendu.notices.length, 0);
+});
+
+test('le résumé d’absence ignore ses propres changements et la première ouverture', async () => {
+  const maintenant = Date.now();
+  for (const avant of [maintenant - 10000, 0]) {
+    const { plugin, rendu } = charger({ ...ETAT_TEST, prenom: 'Alice', derniereOuverture: avant, aVoir: {
+      'moi.md': { auteurs: ['Alice'], le: maintenant - 1000 },
+      ...(avant ? {} : { 'ami.md': { auteurs: ['Bruno'], le: maintenant - 1000 } }),
+    } });
+    await plugin.onload(); plugin.resumerAbsence(); assert.equal(rendu.notices.length, 0);
+  }
+});
+
+test('le filtre des changements masque les cartes sans requête et ignore casse et accents', async () => {
+  const { plugin, rendu } = charger(ETAT_TEST); await plugin.onload();
+  const changement = { auteurId: 'm1', auteur: 'Alice', le: Date.now() };
+  let appels = 0;
+  plugin.moteur.api = async () => { appels++; return { json: async () => ({ ...INFO_TEST, changements: [
+    { ...changement, rev: 2, chemin: 'Électricité/Résumé.md' },
+    { ...changement, rev: 1, chemin: 'Cours/Autre.md' },
+  ] }) }; };
+  await plugin.ruban.callback();
+  const t = rendu.modal.tableau, [premiere, seconde] = t.zone.children, avant = appels;
+  assert.equal(t.recherche.getAttribute('placeholder'), 'Filtrer…');
+  t.recherche.value = 'ELECTRICITE/reSUME'; t.recherche.oninput();
+  assert.equal(premiere.hidden, false); assert.equal(seconde.hidden, true); assert.equal(appels, avant);
+  await t.charger(); assert.equal(seconde.hidden, true, 'le filtre reste appliqué après actualisation');
+  t.recherche.value = 'introuvable'; t.recherche.oninput(); assert.equal(premiere.hidden, true);
+  t.recherche.value = ''; t.recherche.oninput();
+  assert.equal(premiere.hidden, false); assert.equal(seconde.hidden, false);
+  assert.equal(t.zone.children[0], premiere, 'les cartes conservent leur identité');
+});
+
+test('le clic sur le statut ouvre les cinq actions et conserve le panneau sans Menu', async () => {
+  const { plugin, rendu, obsidian } = charger(ETAT_TEST); await plugin.onload();
+  const appels = [];
+  plugin.ouvrirPanneau = () => appels.push('panneau');
+  rendu.clicStatut(); assert.deepEqual(appels, ['panneau']); appels.length = 0;
+  obsidian.Menu = class {
+    constructor() { this.entrees = []; rendu.menu = this; }
+    addItem(creer) { const i = { setTitle(t) { this.titre = t; return this; }, setIcon() { return this; }, onClick(action) { this.action = action; return this; } }; creer(i); this.entrees.push(i); }
+    showAtMouseEvent(evt) { this.evt = evt; }
+    showAtPosition(pos) { this.position = pos; }
+  };
+  plugin.lancer = options => appels.push(['synchro', options.forcer]);
+  plugin.mettreEnPause = pause => appels.push(['pause', pause]);
+  plugin.ouvrirSemaine = () => appels.push('semaine');
+  plugin.ouvrirProchainAVoir = () => appels.push('prochain');
+  const evt = { clientX: 10, clientY: 20 }; rendu.clicStatut(evt);
+  assert.deepEqual(rendu.menu.entrees.map(i => i.titre), ['Synchroniser', 'Pause', 'Ouvrir le panneau', 'Ouvrir la semaine', 'Ouvrir la prochaine note à voir']);
+  assert.equal(rendu.menu.evt, evt);
+  for (const i of rendu.menu.entrees) await i.action();
+  assert.deepEqual(appels, [['synchro', true], ['pause', true], 'panneau', 'semaine', 'prochain']);
+  plugin.etat.enPause = true; plugin.barre.getBoundingClientRect = () => ({ left: 3, top: 4 });
+  rendu.clicStatut(); assert.equal(rendu.menu.entrees[1].titre, 'Reprendre');
+  assert.deepEqual({ ...rendu.menu.position }, { x: 3, y: 4 });
+  await rendu.menu.entrees[1].action(); assert.deepEqual(appels.at(-1), ['pause', false]);
 });

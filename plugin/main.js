@@ -721,6 +721,8 @@ const identifiantLocal = () => Math.random().toString(36).slice(2, 10) + Date.no
 class CordeePlugin extends (O ? O.Plugin : Object) {
   async onload() {
     this.etat = Object.assign({}, PAR_DEFAUT, await this.loadData());
+    this.ouverture = { avant: this.etat.derniereOuverture || this.etat.derniereSynchro || 0, le: Date.now(), coffreId: this.etat.coffreId };
+    this.etat.derniereOuverture = this.ouverture.le;
     this.initialiserMoodle();
     if (this.connecte()) this.memoriserPreferences();
     this.phase = 'pret';
@@ -734,9 +736,9 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.etat.cacheCalendriers = { ...(this.etat.cacheCalendriers || {}) };
     this.abonnesCalendrier = new Set();
     this.barre = this.addStatusBarItem();
-    // La barre d'état ouvre le panneau : c'est là qu'on regarde quand quelque chose a bougé.
+    // Les actions courantes restent accessibles depuis le statut, même panneau fermé.
     this.barre.addClass?.('mod-clickable');
-    this.barre.onClickEvent?.(() => this.ouvrirPanneau());
+    this.barre.onClickEvent?.((evt) => this.ouvrirMenuStatut(evt));
     this.presence = [];
     this.initialiserConnexions();
     enregistrerGeii(this);
@@ -787,6 +789,11 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
       this.registerEvent(this.app.workspace.on('file-open', (f) => { const e = f && this.etat.aVoir[f.path]; if (e && !e.ouvert) { e.ouvert = true; this.rafraichirMarques(); } }));
       this.registerEvent(this.app.workspace.on('file-open', (f) => this.annoncerPresence(f?.path ?? null)));
       this.registerEvent(this.app.workspace.on('file-menu', (menu, f) => {
+        if (!this.connecte() || !(f instanceof O.TFolder) || !f.path) return;
+        const ignore = this.etat.dossiersIgnores.split(',').map((s) => s.trim()).includes(f.path);
+        menu.addItem((i) => i.setTitle(ignore ? 'Partager à nouveau ce dossier' : 'Ne pas partager ce dossier').setIcon(ignore ? 'folder-sync' : 'folder-lock').onClick(() => this.basculerPartageDossier(f.path)));
+      }));
+      this.registerEvent(this.app.workspace.on('file-menu', (menu, f) => {
         if (!this.connecte() || !(f instanceof O.TFile)) return;
         menu.addItem((i) => i.setTitle('Historique Cordée').setIcon('history').onClick(() => new HistoriqueModal(this.app, this, f.path).open()));
       }));
@@ -811,6 +818,23 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.arret = true; this.arreterFlux(); clearTimeout(this.minuteur); clearTimeout(this.minuteurMarques); this.abonnesStatut.clear(); this.styleMarques?.remove?.(); }
 
   /* ---------- Ce que les amis ont changé et que tu n'as pas encore vu ---------- */
+
+  resumerAbsence() {
+    const ouverture = this.ouverture;
+    if (!ouverture || ouverture.resumee) return;
+    ouverture.resumee = true;
+    if (!ouverture.avant || ouverture.coffreId !== this.etat.coffreId) return;
+    const comptes = new Map();
+    for (const e of Object.values(this.etat.aVoir || {})) {
+      // Les changements arrivés pendant cette session ne font pas partie de l'absence.
+      if (!(e.le > ouverture.avant && e.le <= ouverture.le)) continue;
+      for (const auteur of new Set(e.auteurs || [])) {
+        if (!auteur || auteur === this.etat.prenom) continue;
+        comptes.set(auteur, (comptes.get(auteur) || 0) + 1);
+      }
+    }
+    if (comptes.size) new O.Notice('Pendant ton absence : ' + [...comptes].map(([nom, n], i) => `${nom}${i ? '' : ' a modifié'} ${n}${i ? '' : ` note${n > 1 ? 's' : ''}`}`).join(', ') + '.', 7000);
+  }
 
   nettoyerAVoir(aVoir) {
     const propre = {};
@@ -1290,6 +1314,33 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     if (!enPause) await this.lancer();
   }
 
+  ouvrirMenuStatut(evt) {
+    if (!O.Menu) return this.ouvrirPanneau();
+    const menu = new O.Menu();
+    menu.addItem((i) => i.setTitle('Synchroniser').setIcon('refresh-cw').onClick(() => this.lancer({ forcer: true })));
+    menu.addItem((i) => i.setTitle(this.etat.enPause ? 'Reprendre' : 'Pause').setIcon(this.etat.enPause ? 'play' : 'pause').onClick(() => this.mettreEnPause(!this.etat.enPause)));
+    menu.addItem((i) => i.setTitle('Ouvrir le panneau').setIcon('panel-right').onClick(() => this.ouvrirPanneau()));
+    menu.addItem((i) => i.setTitle('Ouvrir la semaine').setIcon('calendar-days').onClick(() => this.ouvrirSemaine()));
+    menu.addItem((i) => i.setTitle('Ouvrir la prochaine note à voir').setIcon('arrow-right').onClick(() => this.ouvrirProchainAVoir()));
+    if (evt?.clientX !== undefined) menu.showAtMouseEvent(evt);
+    else { const r = this.barre.getBoundingClientRect(); menu.showAtPosition({ x: r.left, y: r.top }); }
+  }
+
+  async basculerPartageDossier(chemin) {
+    if (!this.connecte() || !chemin) return;
+    // Le format existant utilise la virgule comme séparateur : ce nom serait ambigu.
+    if (chemin.includes(',')) { new O.Notice('Ce nom de dossier contient une virgule.'); return; }
+    const avant = this.etat.dossiersIgnores;
+    const dossiers = new Set(avant.split(',').map((s) => s.trim()).filter(Boolean));
+    const partager = dossiers.delete(chemin);
+    if (!partager) dossiers.add(chemin);
+    this.etat.dossiersIgnores = [...dossiers].join(', ');
+    try { await this.saveData(this.etat); }
+    catch { this.etat.dossiersIgnores = avant; new O.Notice('Impossible de conserver ce réglage.'); return; }
+    new O.Notice(partager ? 'Ce dossier est à nouveau partagé.' : 'Ce dossier n’est plus partagé.');
+    await this.lancer({ forcer: true });
+  }
+
   changementLocal(f, ancien) {
     const chemins = [f?.path, typeof ancien === 'string' ? ancien : null].filter((p) => p && !this.moteur.ignorer(p));
     if (!chemins.length) return;
@@ -1318,6 +1369,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.dernierResumeBloques = resume;
     if (this.phase === 'ok') this.verifierVersions();
     if (this.phase === 'ok') {
+      this.resumerAbsence();
       this.etat.derniereSynchro = Date.now();
       try { await this.saveData(this.etat); }
       catch { this.derniereErreur = 'Impossible de conserver l’état local. Vérifie que le dossier du coffre est accessible en écriture.'; }
@@ -2135,12 +2187,20 @@ if (O) {
       const activite = accordeon(tableau, 'activite', 'Derniers changements');
       this.titreActivite = activite.titre;
       boutonCordee(activite.actions, 'Actualiser', () => this.charger(), { icone: 'rotate-cw', cls: 'cordee-bouton-discret' });
+      this.recherche = activite.corps.createEl('input', { cls: 'cordee-filtre-activite', attr: { type: 'search', placeholder: 'Filtrer…', 'aria-label': 'Filtrer les chemins' } });
+      this.recherche.oninput = () => this.filtrerChemins();
       this.information = activite.corps.createEl('p', { cls: 'cordee-details' });
       this.zone = activite.corps.createEl('div', { cls: 'cordee-fichiers', attr: { 'aria-live': 'polite' } });
       this.chargement = this.charger();
     }
     actif() { return !this.detruit && !this.plugin.arret && this.plugin.etat.coffreId === this.coffreId && this.plugin.etat.jeton === this.jeton; }
     signaturePresence() { return JSON.stringify((this.plugin.presence || []).map((p) => [p.id, p.nom])); }
+    filtrerChemins() {
+      // Filtrer les cartes déjà reçues évite une requête à chaque frappe.
+      const normaliser = (texte) => texte.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('fr');
+      const filtre = normaliser(this.recherche.value.trim());
+      for (const { carte } of this.cartesActivite?.values() || []) carte.hidden = !normaliser(carte.getAttribute('title') || '').includes(filtre);
+    }
     /** La journée en un coup d'œil : cours qui restent aujourd'hui et devoirs Moodle à rendre dans la semaine. */
     async afficherAujourdhui() {
       const zone = this.aujourdhuiEl, p = this.plugin;
@@ -2288,6 +2348,7 @@ if (O) {
           cartes.set(cle, { signature, carte, auteur }); elements.push(carte);
         }
         reconcilierListe(this.zone, elements); this.cartesActivite = cartes; this.chargee = true;
+        this.filtrerChemins();
       } catch (erreur) { if (this.actif() && this.tour === tour) {
         if (this.chargee) texteSiChange(this.information, 'Actualisation impossible : ' + expliquerErreur(erreur));
         else { this.zone.empty(); this.zone.createEl('p', { text: expliquerErreur(erreur), cls: 'cordee-vide' }); }

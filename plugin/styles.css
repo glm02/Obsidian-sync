@@ -403,6 +403,8 @@ button.cordee-bouton.cordee-bouton-icone[hidden] { display: none; }
 /* ---------- 0.4.12 ---------- */
 /* Activité : les lignes ne se tassent plus les unes sur les autres dans la liste à défilement. */
 .cordee-fichiers > * { flex: none; }
+.cordee-fichiers > [hidden] { display: none; }
+.cordee-filtre-activite { width: 100%; margin-bottom: var(--size-4-2); }
 .cordee-fichier > * { min-width: 0; }
 /* Fiche d'un membre. */
 .cordee-fiche-tete { display: flex; align-items: center; gap: var(--size-4-3); margin-bottom: var(--size-4-2); }
