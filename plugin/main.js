@@ -2357,8 +2357,7 @@ if (O) {
     /** Calendriers iCal de cet appareil : emploi du temps, Moodle… Les liens ne quittent jamais l'appareil. */
     afficherCalendriers(c, rafraichir) {
       const p = this.plugin;
-      c.createEl('h3', { text: 'Calendriers' });
-      c.createEl('p', { text: 'Colle le lien iCal de ton emploi du temps (ADE, Hyperplanning…) et celui de Moodle (Calendrier → Exporter le calendrier → Obtenir l’adresse du calendrier) : tes cours et tes devoirs à rendre s’affichent dans la vue Semaine. « Pour moi » : le lien reste sur cet appareil. « Pour toute la cordée » : il est écrit dans la note partagée « Agenda de la cordée » et chacun voit le même emploi du temps. Un lien Moodle, personnel, ne se partage pas.', cls: 'cordee-details' });
+      c.createEl('p', { text: 'Lien iCal de l’emploi du temps (ADE…) ou de Moodle (Calendrier → Exporter). Cours et devoirs apparaissent dans la Semaine.', cls: 'cordee-details' });
       // Calendriers partagés : lus dans la note commune (lecture asynchrone, affichés dès qu'ils sont là).
       const zonePartages = c.createEl('div');
       p.texteAgenda().then((texte) => {
@@ -2388,17 +2387,16 @@ if (O) {
           rafraichir();
         } catch (e) { new O.Notice('Cordée : ' + e.message); }
       };
-      new O.Setting(c).setDesc('Un emploi du temps commun au groupe : ajoute-le une fois pour toute la cordée.')
+      new O.Setting(c).setDesc('« Pour toute la cordée » : chacun voit le même emploi du temps.')
         .addButton((b) => b.setButtonText('Ajouter pour moi').onClick(() => ajouter(false)))
         .addButton((b) => b.setButtonText('Ajouter pour toute la cordée').setCta().onClick(() => ajouter(true)));
-      new O.Setting(c).setName('La semaine').setDesc('Cours, devoirs Moodle et agenda de la cordée au même endroit.').addButton((b) => b.setButtonText('Ouvrir la semaine').onClick(() => p.ouvrirSemaine()));
+      new O.Setting(c).setName('La semaine').addButton((b) => b.setButtonText('Ouvrir la semaine').onClick(() => p.ouvrirSemaine()));
     }
     hide() { this.nettoyer(); }
     afficherDans(c, rafraichir) {
       const p = this.plugin, e = p.etat, f = this.form;
       this.nettoyer();
       c.empty();
-      afficherReglagesMoodle(c, p);
       if (p.connecte()) {
         c.createEl('h3', { text: `Coffre partagé : ${e.nomCoffre}` });
         const identite = c.createEl('p');
@@ -2417,13 +2415,17 @@ if (O) {
           attention.setText(p.derniereErreur || p.texteBloques?.() || (p.suppressionsBloquees ? `${p.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : p.fichiersTropGros.size ? `${p.fichiersTropGros.size} fichier(s) dépassent la limite de 50 Mo et n’ont pas été envoyés.` : e.enPause ? 'Les prochaines synchronisations sont suspendues. Une opération déjà lancée se termine normalement.' : ''));
           attention.hidden = !attention.textContent;
         });
-        new O.Setting(c).setName('Inviter un ami').setDesc('Crée un lien à lui envoyer.').addButton((b) => b.setButtonText('Créer une invitation').setCta().onClick(() => p.inviter()));
-        new O.Setting(c).setName('Synchroniser maintenant').setDesc('Lance une synchronisation ponctuelle, même pendant la pause.').addButton((b) => b.setButtonText('Synchroniser').onClick(() => p.lancer({ forcer: true })));
-        new O.Setting(c).setName('Membres et activité').setDesc('Retrouve les membres du groupe et les 40 derniers changements.').addButton((b) => b.setButtonText('Voir l’activité').onClick(() => new ActiviteModal(this.app, p).open()));
-        new O.Setting(c).setName('Mon profil').setDesc('Modifie ton nom affiché et ta photo pour ce groupe.').addButton((b) => b.setButtonText('Mon profil').onClick(() => new ProfilModal(this.app, p).open()));
-        new O.Setting(c).setName('Dossiers non partagés').setDesc('Séparés par des virgules, par exemple : Brouillons, Perso').addText((t) => t.setValue(e.dossiersIgnores).onChange(async (v) => { e.dossiersIgnores = v; await p.saveData(e); }));
-        this.afficherCalendriers(c, rafraichir);
-        new O.Setting(c).setName('Quitter ce coffre').setDesc('Tes fichiers restent sur ton ordinateur ; ils ne se synchronisent plus.').addButton((b) => b.setButtonText('Quitter').setWarning().onClick(async () => { await p.quitter(); rafraichir(); }));
+        // Les actions courantes tiennent sur une seule ligne au lieu de quatre réglages.
+        new O.Setting(c.createEl('div', { cls: 'cordee-actions' }))
+          .addButton((b) => b.setButtonText('Inviter').setCta().onClick(() => p.inviter()))
+          .addButton((b) => b.setButtonText('Synchroniser').onClick(() => p.lancer({ forcer: true })))
+          .addButton((b) => b.setButtonText('Activité').onClick(() => new ActiviteModal(this.app, p).open()))
+          .addButton((b) => b.setButtonText('Mon profil').onClick(() => new ProfilModal(this.app, p).open()));
+        new O.Setting(c).setName('Dossiers non partagés').setDesc('Séparés par des virgules : Brouillons, Perso').addText((t) => t.setValue(e.dossiersIgnores).onChange(async (v) => { e.dossiersIgnores = v; await p.saveData(e); }));
+        // Calendriers et Moodle sont repliés : on ne les règle qu'une fois.
+        this.afficherCalendriers(sectionRepliable(c, 'Calendriers', 'calendriers', this), rafraichir);
+        afficherReglagesMoodle(sectionRepliable(c, 'Moodle', 'moodle', this), p);
+        new O.Setting(c).setName('Quitter ce coffre').setDesc('Tes fichiers restent sur cet appareil.').addButton((b) => b.setButtonText('Quitter').setWarning().onClick(async () => { await p.quitter(); rafraichir(); }));
         return;
       }
       c.createEl('h3', { text: 'Rejoindre un coffre' });
@@ -2448,6 +2450,7 @@ if (O) {
       new O.Setting(c).setName('Dossiers non partagés').setDesc('Facultatif. À exclure avant le premier envoi, séparés par des virgules.').addText((t) => t.setValue(f.dossiersIgnores).onChange((v) => { f.dossiersIgnores = v; }));
       if (!f.creer) {
         new O.Setting(c).setName('Partager ce coffre avec des amis').setDesc('Crée un nouveau groupe sur ton serveur.').addButton((b) => b.setButtonText('Créer un nouveau partage').onClick(() => { f.creer = true; rafraichir(); }));
+        afficherReglagesMoodle(sectionRepliable(c, 'Moodle', 'moodle', this), p);
         return;
       }
       c.createEl('h3', { text: 'Ou créer un coffre partagé' });
@@ -2461,6 +2464,7 @@ if (O) {
         try { await p.rejoindreOuCreer('/api/coffres', { nom: f.nom.trim(), prenom: f.prenom.trim(), codeCreation: f.code.trim() }, f.serveur); rafraichir(); }
         catch (err) { new O.Notice('Cordée : ' + err.message); }
       }));
+      afficherReglagesMoodle(sectionRepliable(c, 'Moodle', 'moodle', this), p);
     }
   };
 
@@ -3221,20 +3225,29 @@ Object.assign(CordeePlugin.prototype, {
   },
 });
 
+/** Section repliable des réglages ; son état ouvert/fermé est gardé le temps de la session. */
+function sectionRepliable(c, titre, cle, hote) {
+  const ouverts = hote.sectionsOuvertes || (hote.sectionsOuvertes = new Set());
+  const d = c.createEl('details', { cls: 'cordee-section' });
+  d.open = ouverts.has(cle);
+  d.createEl('summary', { text: titre });
+  d.addEventListener?.('toggle', () => { if (d.open) ouverts.add(cle); else ouverts.delete(cle); });
+  return d.createEl('div');
+}
+
 function afficherReglagesMoodle(c, p) {
   const zone = c.createEl('div', { cls: 'cordee-moodle' });
-  zone.createEl('h3', { text: 'Moodle' });
-  zone.createEl('p', { text: 'Récupère tes PDF de cours, TD, TP et sujets dans le coffre. Les fichiers choisis sont partagés avec la cordée, sauf dans les « Dossiers non partagés ». Le jeton reste dans la configuration de cet appareil.', cls: 'cordee-details' });
+  zone.createEl('p', { text: 'Tes PDF de cours, TD et TP dans le coffre. Le jeton reste sur cet appareil.', cls: 'cordee-details' });
   const retour = zone.createEl('p', { cls: 'cordee-details', attr: { role: 'status', 'aria-live': 'polite' } });
   let adresse = p.etat.moodle.site, identifiant = '', jeton, motDePasse;
-  new O.Setting(zone).setName('Adresse du site Moodle').setDesc('Colle l’adresse du site ou sa page de connexion : la fin /login/index.php est retirée automatiquement. Pour le champ « Lien iCal », utilise plutôt Calendrier → Exporter le calendrier dans Moodle.').addText((t) => t.setPlaceholder('https://moodle.exemple.fr').setValue(adresse).onChange((v) => { adresse = v; }));
-  new O.Setting(zone).setName('Connexion universitaire').setDesc('Pour Lyon 1 et les connexions via le site de l’université, même si tes préférences Moodle n’affichent qu’une clé RSS.').addButton((b) => b.setButtonText('Se connecter via le navigateur').onClick(() => {
+  new O.Setting(zone).setName('Adresse du site Moodle').setDesc('Le site ou sa page de connexion.').addText((t) => t.setPlaceholder('https://moodle.exemple.fr').setValue(adresse).onChange((v) => { adresse = v; }));
+  new O.Setting(zone).setName('Connexion universitaire').setDesc('Recommandé (Lyon 1, connexion de l’université).').addButton((b) => b.setButtonText('Se connecter via le navigateur').setCta().onClick(() => {
     try { new ConnexionMoodleModal(p.app, p, siteMoodle(adresse)).open(); }
     catch (e) { retour.setText(e.message); }
   }));
   new O.Setting(zone).setName('Identifiant Moodle').setDesc('Facultatif si tu colles un jeton.').addText((t) => t.onChange((v) => { identifiant = v; }));
-  new O.Setting(zone).setName('Mot de passe Moodle').setDesc('Utilisé une seule fois pour obtenir un jeton, jamais enregistré.').addText((t) => { motDePasse = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; });
-  new O.Setting(zone).setName('Jeton Moodle').setDesc('Dans Moodle → Préférences → Clés de sécurité, copie la clé du service « Moodle mobile web service », pas la clé RSS. Avec un jeton, laisse le mot de passe vide. Un champ vide conserve le jeton déjà enregistré pour ce site.').addText((t) => { jeton = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; t.setPlaceholder(p.etat.moodle.jeton ? 'Jeton enregistré sur cet appareil' : 'Coller un jeton'); });
+  new O.Setting(zone).setName('Mot de passe Moodle').setDesc('Jamais enregistré.').addText((t) => { motDePasse = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; });
+  new O.Setting(zone).setName('Jeton Moodle').setDesc('Préférences → Clés de sécurité → « Moodle mobile web service » (pas la clé RSS).').addText((t) => { jeton = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; t.setPlaceholder(p.etat.moodle.jeton ? 'Jeton enregistré sur cet appareil' : 'Coller un jeton'); });
   new O.Setting(zone).addButton((b) => b.setButtonText('Tester').onClick(async () => {
     b.setDisabled(true);
     const secret = motDePasse.inputEl.value || '', cle = jeton.inputEl.value || '';

@@ -308,3 +308,10 @@ textarea.cordee-geii-code:focus { outline: 1px solid var(--interactive-accent); 
   .cordee-moodle-visuel { height: 125px; }
 }
 /* ---------- Fin Moodle ---------- */
+
+/* Réglages épurés : actions sur une ligne, sections secondaires repliables. */
+.cordee-actions .setting-item-control { justify-content: flex-start; flex-wrap: wrap; gap: var(--size-4-2); }
+.cordee-actions .setting-item-info { display: none; }
+.cordee-section { border-top: 1px solid var(--background-modifier-border); padding: var(--size-4-2) 0; }
+.cordee-section > summary { cursor: pointer; font-weight: var(--font-semibold); padding: var(--size-4-1) 0; }
+.cordee-section[open] > summary { margin-bottom: var(--size-4-2); }

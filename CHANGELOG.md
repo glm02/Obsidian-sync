@@ -1,5 +1,9 @@
 # Nouveautés
 
+## 0.4.7
+
+- **Réglages épurés** : le coffre partagé passe en premier ; Calendriers et Moodle deviennent des sections repliables. Inviter, Synchroniser, Activité et Mon profil tiennent sur une seule ligne. Les descriptions sont raccourcies et la connexion Moodle par le navigateur est mise en avant.
+
 ## 0.4.6
 
 - **Panneau sans saccades** : l’actualisation en arrière-plan conserve l’activité affichée pendant la récupération. Les cartes et boutons inchangés sont réutilisés, y compris lors du filtrage ; le panneau ne se vide plus brièvement et ne perd plus le focus sur ces éléments.
