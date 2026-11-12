@@ -367,3 +367,13 @@ textarea.cordee-geii-code:focus { outline: 1px solid var(--interactive-accent); 
 .cordee-vue .cordee-tableau-etat { padding: var(--size-4-1) var(--size-4-2); }
 .cordee-vue .cordee-collegues { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
 .cordee-evenement-bientot { color: var(--text-accent); font-size: var(--font-ui-smaller); font-weight: var(--font-medium); }
+
+/* ---------- 0.4.12 ---------- */
+/* Activité : les lignes ne se tassent plus les unes sur les autres dans la liste à défilement. */
+.cordee-fichiers > * { flex: none; }
+.cordee-fichier > * { min-width: 0; }
+/* Fiche d'un membre. */
+.cordee-fiche-tete { display: flex; align-items: center; gap: var(--size-4-3); margin-bottom: var(--size-4-2); }
+.cordee-fiche-tete .cordee-avatar { width: 56px; height: 56px; flex-basis: 56px; font-size: 1.3em; }
+.cordee-fiche-tete p { margin: 2px 0 0; }
+.cordee-fiche-modal .cordee-commandes { margin-top: var(--size-4-3); }

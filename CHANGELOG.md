@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.12
+
+- **Activité réparée** : les lignes de « Derniers changements » ne se chevauchent plus.
+- **Clic sur un membre** : un menu propose sa fiche (photo, présence, activité), ses changements, ou « Modifier mon profil » pour toi.
+- Le site affiche la version à jour.
+
 ## 0.4.11
 
 - **Fini le blocage sur « synchronisation… »** : une requête sans réponse est abandonnée après 45 s (plus pour un gros fichier) au lieu d’attendre pour toujours. Une coupure réseau relance la synchro toute seule 15 s plus tard.

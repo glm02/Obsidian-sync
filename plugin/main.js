@@ -470,7 +470,7 @@ async function enParallele(elements, limite, travail) {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.11';
+const VERSION = '0.4.12';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -699,7 +699,7 @@ function fichiersObsidian(app) {
   };
 }
 
-let InvitationModal, ActiviteModal, RevisionModal, ProfilModal, ReglagesCordee, PanneauCordee, VuePanneau, HistoriqueModal;
+let InvitationModal, ActiviteModal, RevisionModal, ProfilModal, FicheMembreModal, ReglagesCordee, PanneauCordee, VuePanneau, HistoriqueModal;
 const VUE_CORDEE = 'cordee-panneau';
 const VUE_SEMAINE = 'cordee-semaine';
 let VueSemaine, EvenementModal, CreneauModal, dessinerSemaine;
@@ -1792,7 +1792,7 @@ function boutonCordee(c, texte, action, options = {}) {
   const icone = options.icone && O?.setIcon;
   const bouton = c.createEl('button', { text: icone ? '' : texte, cls: 'cordee-bouton ' + (icone ? 'cordee-bouton-icone ' : '') + (options.cls || ''), attr: { type: 'button', 'aria-label': options.label || texte, ...options.attr } });
   if (icone) O.setIcon(bouton, options.icone);
-  bouton.onclick = () => { if (!bouton.disabled) return action(); };
+  bouton.onclick = (evt) => { if (!bouton.disabled) return action(evt); };
   return bouton;
 }
 
@@ -1826,6 +1826,25 @@ if (O) {
       new O.Setting(c).addButton((b) => b.setButtonText('Copier').setCta().onClick(async () => {
         try { await navigator.clipboard.writeText(this.lien); new O.Notice('Lien copié'); } catch (e) { champ.select(); }
       }));
+    }
+    onClose() { this.contentEl.empty(); }
+  };
+
+  /** Fiche d'un membre : photo, présence, activité récente et raccourcis. */
+  FicheMembreModal = class extends O.Modal {
+    constructor(app, plugin, membre, infos) { super(app); this.plugin = plugin; this.membre = membre; this.infos = infos; }
+    onOpen() {
+      const c = this.contentEl, m = this.membre, i = this.infos;
+      c.empty(); this.modalEl?.classList.add('cordee-fiche-modal');
+      const tete = c.createEl('div', { cls: 'cordee-fiche-tete' });
+      afficherAvatar(tete, m.nom, m.avatar);
+      const id = tete.createEl('div');
+      id.createEl('h2', { text: m.nom + (i.moi ? ' (toi)' : ''), cls: 'cordee-titre' });
+      if (i.statut) id.createEl('p', { text: i.statut, cls: 'cordee-presence-membre' });
+      if (i.compte) c.createEl('p', { text: i.compte, cls: 'cordee-details' });
+      const actions = c.createEl('div', { cls: 'cordee-commandes' });
+      boutonCordee(actions, 'Voir ses changements', () => { this.close(); return i.filtrer(); }, { cls: 'cordee-bouton-principal' });
+      if (i.moi) boutonCordee(actions, 'Modifier mon profil', () => { this.close(); new ProfilModal(this.app, this.plugin).open(); }, { cls: 'cordee-bouton-discret' });
     }
     onClose() { this.contentEl.empty(); }
   };
@@ -2145,7 +2164,17 @@ if (O) {
           const profil = JSON.stringify([membre.nom, membre.avatar]);
           let ligne = this.cartesMembres?.get(cle);
           if (!ligne || ligne.profil !== profil) {
-            const bouton = boutonCordee(this.membresEl, '', () => { this.filtre = membre.id; return this.charger(); }, { label: `Voir les changements de ${membre.nom}`, cls: 'cordee-collegue', attr: { 'data-membre-id': membre.id || '' } });
+            const filtrer = () => { this.filtre = membre.id; return this.charger(); };
+            const bouton = boutonCordee(this.membresEl, '', (evt) => {
+              const actuel = ligne?.membre || membre;
+              if (!O.Menu) return filtrer();
+              const menu = new O.Menu();
+              menu.addItem((i) => i.setTitle('Voir sa fiche').setIcon('id-card').onClick(() => new FicheMembreModal(this.app, this.plugin, actuel, { statut: ligne?.statut?.textContent || '', compte: ligne?.compte?.textContent || '', moi: actuel.id === this.moiPresence, filtrer }).open()));
+              menu.addItem((i) => i.setTitle('Voir ses changements').setIcon('list-filter').onClick(filtrer));
+              if (actuel.id === this.moiPresence) menu.addItem((i) => i.setTitle('Modifier mon profil').setIcon('user-cog').onClick(() => new ProfilModal(this.app, this.plugin).open()));
+              if (evt?.clientX !== undefined && evt.clientX + evt.clientY > 0) menu.showAtMouseEvent(evt);
+              else { const r = bouton.getBoundingClientRect(); menu.showAtPosition({ x: r.left, y: r.bottom }); }
+            }, { label: `Voir les changements de ${membre.nom}`, cls: 'cordee-collegue', attr: { 'data-membre-id': membre.id || '' } });
             bouton.disabled = !membre.id;
             afficherAvatar(bouton, membre.nom, membre.avatar);
             const identite = bouton.createEl('span', { cls: 'cordee-collegue-identite' });
