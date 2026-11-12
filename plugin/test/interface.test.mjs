@@ -7,9 +7,11 @@ import { webcrypto } from 'node:crypto';
 function charger(etat, navigateur = {}) {
   const rendu = { textes: [], boutons: new Map(), elements: [], champs: [], ouvertures: 0, commandes: new Map(), notices: [] };
   const container = (racine = true) => ({
-    enfants: [],
+    enfants: [], attrs: {},
     style: {}, value: '', scrollTop: 0, scrollLeft: 0,
-    addClass(cls) { this.classes = [...(this.classes || []), cls]; },
+    addClass(...classes) { this.classes = [...new Set([...(this.classes || (this.attrs.cls || '').split(' ').filter(Boolean)), ...classes])]; },
+    removeClass(...classes) { this.classes = (this.classes || (this.attrs.cls || '').split(' ')).filter((cls) => !classes.includes(cls)); },
+    querySelector(tag) { for (const enfant of this.enfants) { if (enfant.tag === tag) return enfant; const trouve = enfant.querySelector(tag); if (trouve) return trouve; } return null; },
     get children() { return this.enfants; },
     appendChild(enfant) { return this.insertBefore(enfant, null); },
     insertBefore(enfant, reference) {
@@ -28,6 +30,7 @@ function charger(etat, navigateur = {}) {
     get ownerDocument() { return { createElementNS: (_, tag) => { const enfant = container(false); enfant.tag = tag; enfant.attrs = {}; rendu.elements.push(enfant); return enfant; } }; },
     empty() {
       this.vidages = (this.vidages || 0) + 1;
+      this.textContent = '';
       const descendants = new Set();
       const ajouter = (node) => { descendants.add(node); node.enfants.forEach(ajouter); };
       this.enfants.forEach(ajouter); this.enfants = [];
@@ -439,6 +442,63 @@ test('le panneau met à jour son état sans accumuler des abonnements', async ()
   assert.equal(plugin.abonnesStatut.size, 1);
   rendu.modal.onClose();
   assert.equal(plugin.abonnesStatut.size, 0);
+});
+
+test('les icônes du panneau utilisent le catalogue ancien, gardent leurs libellés et reprennent après la pause', async () => {
+  const { plugin, rendu, obsidian } = charger({ ...ETAT_TEST });
+  const noms = new Set(['user', 'settings', 'refresh-cw', 'calendar', 'check', 'rotate-cw', 'pause', 'play']);
+  obsidian.setIcon = (el, nom) => { el.empty(); if (noms.has(nom)) el.createEl('svg', { attr: { 'data-icone': nom } }); };
+  plugin.lancer = async () => {};
+  await plugin.onload(); await plugin.ruban.callback();
+  for (const label of ['Mon profil', 'Configurer', 'Synchroniser', 'La semaine', 'Tout marquer comme vu', 'Actualiser', 'Mettre en pause']) {
+    const bouton = rendu.elements.find((el) => el.getAttribute('aria-label') === label);
+    assert.ok(bouton.querySelector('svg'), label);
+    assert.ok(bouton.classes.includes('clickable-icon'), label);
+    assert.ok(bouton.classes.includes('cordee-bouton-icone'), label);
+    assert.equal(bouton.querySelector('svg').getAttribute('aria-hidden'), 'true');
+    assert.equal(bouton.textContent, '');
+    assert.ok(rendu.boutons.has(label));
+  }
+  const pause = rendu.elements.find((el) => el.getAttribute('aria-label') === 'Mettre en pause');
+  await plugin.mettreEnPause(true);
+  assert.equal(pause.querySelector('svg').getAttribute('data-icone'), 'play');
+  assert.ok(rendu.boutons.has('Reprendre'));
+  await plugin.mettreEnPause(false);
+  assert.equal(pause.querySelector('svg').getAttribute('data-icone'), 'pause');
+  assert.equal(pause.children.length, 1, 'les actualisations ne cumulent pas les SVG');
+});
+
+test('une API d’icône absente, vide ou en erreur conserve le texte et les actions du panneau', async () => {
+  for (const mode of ['absente', 'vide', 'erreur']) {
+    const { plugin, rendu, obsidian } = charger({ ...ETAT_TEST });
+    if (mode !== 'absente') obsidian.setIcon = (el) => { el.empty(); if (mode === 'erreur') throw Error('Icône indisponible'); };
+    let synchros = 0; plugin.lancer = async () => { synchros++; };
+    await plugin.onload(); await plugin.ruban.callback();
+    for (const [label, texte] of [['Synchroniser', 'Synchroniser'], ['La semaine', 'La semaine'], ['Tout marquer comme vu', 'Tout vu'], ['Mettre en pause', 'Mettre en pause']]) {
+      const bouton = rendu.elements.find((el) => el.getAttribute('aria-label') === label);
+      assert.equal(bouton.textContent, texte, mode);
+      assert.equal(bouton.classes?.includes('cordee-bouton-icone') || false, false);
+    }
+    await rendu.boutons.get('Synchroniser')(); assert.equal(synchros, 1);
+    await plugin.mettreEnPause(true);
+    assert.equal(rendu.elements.find((el) => el.getAttribute('aria-label') === 'Reprendre').textContent, 'Reprendre');
+  }
+});
+
+test('la pause perd son format carré si l’icône de reprise manque, puis retrouve son icône', async () => {
+  const { plugin, rendu, obsidian } = charger({ ...ETAT_TEST });
+  obsidian.setIcon = (el, nom) => { el.empty(); if (nom !== 'play') el.createEl('svg'); };
+  plugin.lancer = async () => {};
+  await plugin.onload(); await plugin.ruban.callback();
+  const pause = rendu.elements.find((el) => el.getAttribute('aria-label') === 'Mettre en pause');
+  await plugin.mettreEnPause(true);
+  assert.equal(pause.querySelector('svg'), null);
+  assert.equal(pause.textContent, 'Reprendre');
+  assert.equal(pause.classes.includes('clickable-icon'), false);
+  assert.equal(pause.classes.includes('cordee-bouton-icone'), false);
+  await plugin.mettreEnPause(false);
+  assert.ok(pause.querySelector('svg'));
+  assert.ok(pause.classes.includes('clickable-icon'));
 });
 
 test('les membres et les changements se consultent directement dans le panneau', async () => {
