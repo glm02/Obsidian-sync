@@ -324,6 +324,130 @@ test('une écriture continue part après 200 ms sans repousser la première éch
   assert.equal(id, 3, 'les réglages privés ne déclenchent rien');
 });
 
+// Horloge déterministe : on mesure les vrais envois du moteur, sans attendre plusieurs secondes.
+async function bancDessins() {
+  let horloge = 1000, id = 0, mtime = 0;
+  const timers = new Map(), fichiers = new Map(), blobs = new Map(), envois = [];
+  const { plugin, interne } = charger({ ...ETAT_TEST, bases: {}, cache: {} }, {
+    crypto: webcrypto,
+    Date: class extends Date { static now() { return horloge; } },
+    setTimeout: (f, ms) => { timers.set(++id, { f, le: horloge + ms }); return id; },
+    clearTimeout: (n) => timers.delete(n),
+  });
+  await plugin.onload();
+  plugin.moteur.fichiers = {
+    lister: () => [...fichiers].map(([chemin, f]) => ({ chemin, mtime: f.mtime, taille: f.buf.byteLength })),
+    lire: async (p) => fichiers.get(p)?.buf ?? null,
+    invaliderDossier() {},
+  };
+  plugin.moteur.envoyerBlob = async (hash, buf) => blobs.set(hash, interne.versTexte(buf));
+  plugin.moteur.valider = async (chemin, hash) => { envois.push({ chemin, texte: hash === null ? null : blobs.get(hash), le: horloge }); return 200; };
+  plugin.lancer = () => plugin.moteur.envoyer();
+  return {
+    plugin, envois,
+    modifier(chemin, texte) {
+      fichiers.set(chemin, { buf: interne.versBuffer(texte), mtime: ++mtime });
+      plugin.changementLocal({ path: chemin });
+    },
+    renommer(de, vers) {
+      fichiers.set(vers, fichiers.get(de)); fichiers.delete(de);
+      plugin.changementLocal({ path: vers }, de);
+    },
+    effacer(chemin) { fichiers.delete(chemin); plugin.changementLocal({ path: chemin }); },
+    async avancer(jusqua) {
+      for (;;) {
+        const suivant = [...timers].filter(([, t]) => t.le <= jusqua).sort((a, b) => a[1].le - b[1].le)[0];
+        if (!suivant) break;
+        const [n, timer] = suivant; timers.delete(n); horloge = timer.le; await timer.f();
+      }
+      horloge = jusqua;
+    },
+  };
+}
+
+test('Excalidraw : plusieurs sauvegardes donnent un seul envoi après le calme, les notes gardent 200 ms', async () => {
+  const { plugin, modifier, avancer, envois } = await bancDessins();
+  modifier('schema.excalidraw.md', 'dessin 1');
+  await avancer(1500); modifier('schema.excalidraw.md', 'dessin 2');
+  await avancer(2400); modifier('schema.excalidraw.md', 'dessin final');
+  await avancer(2450); modifier('note.md', 'note urgente');
+  await avancer(2649); assert.equal(envois.length, 0);
+  await avancer(2650);
+  assert.deepEqual(envois, [{ chemin: 'note.md', texte: 'note urgente', le: 2650 }]);
+  // Le flux distant peut lancer une synchro immédiate sans publier un dessin encore en cours.
+  plugin.programmer(0); await avancer(2700);
+  assert.equal(envois.length, 1);
+  await avancer(3899); assert.equal(envois.length, 1);
+  await avancer(3900);
+  assert.deepEqual(envois[1], { chemin: 'schema.excalidraw.md', texte: 'dessin final', le: 3900 });
+  await avancer(6000); assert.equal(envois.length, 2);
+});
+
+test('Excalidraw : une sauvegarde continue part à 5 s, puis ouvre une nouvelle fenêtre par dessin', async () => {
+  const { modifier, avancer, envois } = await bancDessins();
+  modifier('schema.excalidraw', 'trait 0');
+  for (let i = 1; i <= 9; i++) { await avancer(1000 + i * 500); modifier('schema.excalidraw', 'trait ' + i); }
+  await avancer(5999); assert.equal(envois.length, 0);
+  await avancer(6000);
+  assert.deepEqual(envois, [{ chemin: 'schema.excalidraw', texte: 'trait 9', le: 6000 }]);
+  modifier('schema.excalidraw', 'trait suivant');
+  await avancer(6200); modifier('autre.excalidraw.md', 'autre dessin');
+  await avancer(7500);
+  assert.deepEqual(envois[1], { chemin: 'schema.excalidraw', texte: 'trait suivant', le: 7500 });
+  await avancer(7700);
+  assert.deepEqual(envois[2], { chemin: 'autre.excalidraw.md', texte: 'autre dessin', le: 7700 });
+});
+
+test('Excalidraw : une modification pendant le hachage attend, le déchargement annule les minuteurs', async () => {
+  const { plugin, modifier, avancer, envois } = await bancDessins();
+  modifier('schema.excalidraw.md', 'ancien trait');
+  const hashFichier = plugin.moteur.hashFichier.bind(plugin.moteur);
+  plugin.moteur.hashFichier = async (f) => {
+    const h = await hashFichier(f);
+    plugin.moteur.hashFichier = hashFichier;
+    modifier(f.chemin, 'nouveau trait');
+    return h;
+  };
+  await avancer(2500); assert.equal(envois.length, 0);
+  await avancer(4000);
+  assert.deepEqual(envois, [{ chemin: 'schema.excalidraw.md', texte: 'nouveau trait', le: 4000 }]);
+  modifier('schema.excalidraw.md', 'dernier trait');
+  plugin.onunload(); await avancer(10_000);
+  assert.equal(envois.length, 1);
+  assert.equal(plugin.minuteursDessins.size, 0);
+});
+
+test('Excalidraw : un horodatage seul ne renvoie pas les mêmes octets ni ne raccourcit la fenêtre suivante', async () => {
+  const { modifier, avancer, envois } = await bancDessins();
+  modifier('schema.excalidraw.md', 'dessin'); await avancer(2500);
+  modifier('schema.excalidraw.md', 'dessin'); await avancer(4000);
+  assert.equal(envois.length, 1);
+  modifier('schema.excalidraw.md', 'dessin modifié');
+  await avancer(5499); assert.equal(envois.length, 1);
+  await avancer(5500);
+  assert.deepEqual(envois[1], { chemin: 'schema.excalidraw.md', texte: 'dessin modifié', le: 5500 });
+});
+
+test('Excalidraw : un renommage ou une suppression attend aussi, sans effacer prématurément le dessin partagé', async () => {
+  const { modifier, renommer, effacer, avancer, envois } = await bancDessins();
+  modifier('ancien.excalidraw.md', 'dessin'); await avancer(2500);
+  await avancer(2600); renommer('ancien.excalidraw.md', 'nouveau.excalidraw.md');
+  await avancer(2700); modifier('note.md', 'note 1');
+  await avancer(2900);
+  assert.deepEqual(envois.map((e) => e.chemin), ['ancien.excalidraw.md', 'note.md']);
+  await avancer(4100);
+  assert.deepEqual(envois.slice(2), [
+    { chemin: 'nouveau.excalidraw.md', texte: 'dessin', le: 4100 },
+    { chemin: 'ancien.excalidraw.md', texte: null, le: 4100 },
+  ]);
+  await avancer(4150); effacer('nouveau.excalidraw.md');
+  await avancer(4200); modifier('note.md', 'note 2');
+  await avancer(4400);
+  assert.equal(envois.at(-1).chemin, 'note.md');
+  await avancer(5650);
+  assert.deepEqual(envois.at(-1), { chemin: 'nouveau.excalidraw.md', texte: null, le: 5650 });
+});
+
 test('un renommage vers un dossier exclu synchronise la disparition du chemin partagé', async () => {
   const { plugin } = charger({ ...ETAT_TEST, dossiersIgnores: 'Perso' });
   await plugin.onload();

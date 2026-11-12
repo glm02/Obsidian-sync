@@ -4,7 +4,22 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { fusionner, lireInvitation, nomCopieConflit } = require('../main.js').interne;
+const { fusionner, lireInvitation, nomCopieConflit, estExcalidraw, estTexte } = require('../main.js').interne;
+
+test('les dessins et leurs copies gardent leur type, sans fusion de texte', () => {
+  for (const chemin of ['dessins/schema.excalidraw.md', 'schema.excalidraw', 'SCHEMA.EXCALIDRAW.MD', 'SCHEMA.EXCALIDRAW']) {
+    assert.equal(estExcalidraw(chemin), true);
+    assert.equal(estTexte(chemin), false);
+    const copie = nomCopieConflit(chemin, 'Agent');
+    assert.equal(estExcalidraw(copie), true);
+    assert.equal(estTexte(copie), false);
+    assert.match(copie, /\(conflit Agent /);
+  }
+  assert.match(nomCopieConflit('dessins/schema.excalidraw.md', 'Agent'), /^dessins\/schema \(conflit Agent .+\)\.excalidraw\.md$/);
+  for (const chemin of ['note.md', 'excalidraw.md', 'schema.excalidraw.md.bak', 'schema.excalidraw.png', 'dessin.excalidraw/note.md']) {
+    assert.equal(estExcalidraw(chemin), false);
+  }
+});
 
 test('deux modifications à des endroits différents se combinent', () => {
   const base = 'titre\nligne 1\nligne 2\nligne 3';

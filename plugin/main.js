@@ -5,7 +5,7 @@
  * - le serveur garde la liste des fichiers et un numéro de révision qui augmente à chaque changement ;
  * - l'extension retient, pour chaque fichier, l'empreinte (SHA-256) de la dernière version commune (la « base ») ;
  * - si les deux côtés ont modifié une note, on fusionne ligne à ligne base / locale / distante ;
- *   pour une image ou un PDF, on garde les deux fichiers.
+ *   pour un dessin Excalidraw, une image ou un PDF, on garde les deux fichiers.
  */
 'use strict';
 
@@ -28,7 +28,10 @@ const EXT_TEXTE = new Set(['md', 'txt', 'csv']);
 // Les vidéos de cours pèsent des centaines de Mo : elles restent sur l'appareil sauf choix contraire.
 const EXT_VIDEO = new Set(['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'wmv']);
 function estVideo(chemin) { return EXT_VIDEO.has(String(chemin).split('.').pop().toLowerCase()); }
-const estTexte = (chemin) => EXT_TEXTE.has((chemin.split('.').pop() || '').toLowerCase());
+function estExcalidraw(chemin) { return /\.excalidraw(?:\.md)?$/i.test(chemin); }
+// Le Markdown d'Excalidraw enveloppe un dessin structuré, souvent compressé sur une ligne :
+// une fusion ou un diff de lignes ne représente pas les éléments du dessin et peut le casser.
+const estTexte = (chemin) => !estExcalidraw(chemin) && EXT_TEXTE.has((chemin.split('.').pop() || '').toLowerCase());
 
 // Pour chaque ligne de x, indice de la ligne correspondante dans y (plus longue sous-suite commune), ou -1.
 function correspondances(x, y) {
@@ -78,7 +81,8 @@ function fusionner(base, locale, distante) {
 
 function nomCopieConflit(chemin, qui) {
   const date = new Date().toISOString().slice(0, 16).replace('T', ' ').replace(':', 'h');
-  const point = chemin.lastIndexOf('.');
+  // La copie doit rester reconnue comme dessin pour conserver aussi cette protection au prochain conflit.
+  const point = /\.excalidraw\.md$/i.test(chemin) ? chemin.length - '.excalidraw.md'.length : chemin.lastIndexOf('.');
   const slash = chemin.lastIndexOf('/');
   const avec = ` (conflit ${qui} ${date})`;
   return point > slash ? chemin.slice(0, point) + avec + chemin.slice(point) : chemin + avec;
@@ -160,7 +164,18 @@ class Moteur {
     this.tailleMax = tailleMax || 50 * 1024 * 1024;
     this.enCours = null;
     this.encore = false;
+    this.dessinsEnAttente = new Map();
   }
+
+  retenirDessin(chemin) {
+    const maintenant = Date.now();
+    const premier = this.dessinsEnAttente.get(chemin)?.premier ?? maintenant;
+    const echeance = Math.min(maintenant + 1500, premier + 5000);
+    this.dessinsEnAttente.set(chemin, { premier, echeance });
+    return Math.max(0, echeance - maintenant);
+  }
+
+  envoiDessinDiffere(chemin) { return (this.dessinsEnAttente.get(chemin)?.echeance ?? 0) > Date.now(); }
 
   /**
    * Le garde-fou retient une disparition massive (plus de 20 éléments et plus de la moitié du coffre) : c'est
@@ -392,6 +407,8 @@ class Moteur {
     for (const f of this.fichiers.lister()) {
       if (this.ignorer(f.chemin)) continue;
       presents.add(f.chemin);
+      // Une synchro déclenchée par une autre note ou un ami doit respecter le calme du dessin.
+      if (this.envoiDessinDiffere(f.chemin)) continue;
       if (f.taille > this.tailleMax) { this.signaler('fichier-trop-gros', f.chemin); continue; }
       aEnvoyer.push(f);
     }
@@ -399,11 +416,15 @@ class Moteur {
     await enParallele(aEnvoyer, PARALLELE, async (f) => {
       const h = await this.hashFichier(f);
       if (h !== null && h !== (this.etat.bases[f.chemin] || null)) changes.push(f);
+      else if (!this.envoiDessinDiffere(f.chemin)) this.dessinsEnAttente.delete(f.chemin);
     });
     // Les notes et petits fichiers partent d'abord : un gros PDF ne retarde plus tout le reste.
     changes.sort((a, b) => a.taille - b.taille);
     let faits = 0;
     await enParallele(changes, PARALLELE, async (f) => {
+      if (this.envoiDessinDiffere(f.chemin)) return; // nouvel enregistrement pendant le hachage ou les autres envois
+      // Le prochain enregistrement commencera une nouvelle fenêtre, même si cet envoi est encore en cours.
+      this.dessinsEnAttente.delete(f.chemin);
       if (changes.length > 3) this.signaler('progression', ++faits, changes.length, 'envoi');
       const base = this.etat.bases[f.chemin] || null;
       const contenu = await this.fichiers.lire(f.chemin);
@@ -417,7 +438,7 @@ class Moteur {
       if (faits % 20 === 0) await this.sauver();
     });
     if (changes.length > 3) this.signaler('progression', 0, 0);
-    const disparus = Object.keys(this.etat.bases).filter((p) => !presents.has(p) && !this.ignorer(p));
+    const disparus = Object.keys(this.etat.bases).filter((p) => !presents.has(p) && !this.ignorer(p) && !this.envoiDessinDiffere(p));
     const total = Object.keys(this.etat.bases).length;
     // Garde-fou : si la moitié du coffre disparaît d'un coup, c'est plus probablement un accident qu'un choix.
     this.suppressionsFichiers = 0;
@@ -430,6 +451,7 @@ class Moteur {
       if ((await this.valider(p, null, this.etat.bases[p])) === 409) { refus++; continue; }
       delete this.etat.bases[p];
       delete this.etat.cache[p];
+      this.dessinsEnAttente.delete(p);
     }
     return refus + await this.envoyerDossiers(true);
   }
@@ -703,6 +725,9 @@ function fichiersObsidian(app) {
         const sosie = !f && (await vault.adapter.exists(p)) ? sosieParCasse(p, false) : null;
         if (sosie) { await renommerCasse(sosie, p); f = trouver(p); }
       }
+      // modifyBinary émet le « modify » public d'Obsidian. Excalidraw l'écoute déjà dans
+      // EventManager.onModifyHandler → FileManager.modifyEventHandler pour recharger ses vues ouvertes
+      // (github.com/zsviczian/obsidian-excalidraw-plugin, src/core/managers) : aucun appel privé à ajouter.
       if (f) { await vault.modifyBinary(f, buf); return; }
       try { await vault.createBinary(p, buf); }
       catch (e) { if (await vault.adapter.exists(p)) await vault.adapter.writeBinary(p, buf); else throw e; } // présent sur le disque mais pas encore dans l'index d'Obsidian
@@ -815,6 +840,8 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
 
   onunload() {
     if (this.connecte() && !this.presenceIndisponible) this.moteur.api('POST', `/api/coffres/${this.etat.coffreId}/presence`, { parti: true }).catch(() => {});
+    for (const minuteur of this.minuteursDessins?.values() || []) clearTimeout(minuteur);
+    this.minuteursDessins?.clear();
     this.arret = true; this.arreterFlux(); clearTimeout(this.minuteur); clearTimeout(this.minuteurMarques); this.abonnesStatut.clear(); this.styleMarques?.remove?.(); }
 
   /* ---------- Ce que les amis ont changé et que tu n'as pas encore vu ---------- */
@@ -1347,8 +1374,20 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     for (const p of chemins) {
       this.moteur.fichiers.invaliderDossier(p);
       delete this.etat.cache[p]; // même taille et mtime arrondi : le contenu peut tout de même avoir changé
+      if (estExcalidraw(p)) {
+        // Excalidraw réenregistre fréquemment tout le dessin : attendre 1,5 s de calme,
+        // au plus 5 s depuis le premier changement, réduit les gros envois intermédiaires.
+        // On conserve l'empreinte exacte : filtrer l'état d'interface dans le JSON compressé serait fragile.
+        const delai = this.moteur.retenirDessin(p);
+        this.minuteursDessins ||= new Map();
+        clearTimeout(this.minuteursDessins.get(p));
+        this.minuteursDessins.set(p, setTimeout(() => {
+          this.minuteursDessins.delete(p);
+          this.programmer(0);
+        }, delai));
+      }
     }
-    this.programmer(200);
+    if (chemins.some((p) => !estExcalidraw(p))) this.programmer(200);
   }
 
   programmer(ms) {
@@ -3748,7 +3787,7 @@ if (O) NotesMoodleModal = class extends O.Modal {
 module.exports = CordeePlugin;
 module.exports.default = CordeePlugin;
 module.exports.interne = { lireCalendriersPartages, modifierCalendriersPartages, get HistoriqueModal() { return HistoriqueModal; }, get CreneauModal() { return CreneauModal; }, get dessinerSemaine() { return dessinerSemaine; }, lireIcs, developper, lireAgendaPartage, ligneAgenda, typeCalendrier, masquerUrl, debutSemaine, placerEnColonnes, get RevisionModal() { return RevisionModal; }, VERSION, comparerVersions, lignesModifiees, couleurAuteur, ilYa, arriveesPresence, derniereActivite, resumePresence, afficherBarrePresence, echapperCss, fusionner, Moteur, empreinte, versBuffer, versTexte, nomCopieConflit, lireInvitation, expliquerErreur, avatarValide, preparerPhoto, calculerDiff, premierBlocModifie };
-Object.assign(module.exports.interne, { lireAsc, lireKicad, calculerExpressionGeii, calculerBlocGeii, notationIngenieurGeii, estTexte });
+Object.assign(module.exports.interne, { lireAsc, lireKicad, calculerExpressionGeii, calculerBlocGeii, notationIngenieurGeii, estTexte, estExcalidraw });
 Object.assign(module.exports.interne, { nomMoodle, dossierMoodle, siteMoodle, lienConnexionMoodle, jetonDepuisLienMoodle, fichiersMoodle, imageCoursMoodle, typeImageMoodle, doitTelechargerMoodle, modificationLocaleMoodle, copieMoodle, indexMoodle, get CoursMoodleModal() { return CoursMoodleModal; } });
 Object.assign(module.exports.interne, { markdownMoodle, devoirMoodle, noteAnnoncesMoodle, get NotesMoodleModal() { return NotesMoodleModal; } });
 Object.assign(module.exports.interne, { ecouterRevisions });

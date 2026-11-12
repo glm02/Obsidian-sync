@@ -177,6 +177,54 @@ test('deux amis synchronisent, fusionnent et suppriment', async () => {
   }
 });
 
+test('les conflits Excalidraw gardent le dessin distant intact et partagent une copie locale, jamais une fusion', async () => {
+  const srv = await demarrer();
+  try {
+    const cree = (await srv.appel('POST', '/api/coffres', { nom: 'Dessins', prenom: 'Agent A', codeCreation: CODE })).json;
+    const code = (await srv.appel('POST', `/api/coffres/${cree.coffreId}/invitations`, {}, cree.jeton)).json.code;
+    const rejoint = (await srv.appel('POST', '/api/rejoindre', { code, prenom: 'Agent B' })).json;
+    const json = (version: string) => JSON.stringify({ type: 'excalidraw', version: 2, elements: [{ id: version, type: 'rectangle', x: 10, y: 20 }], files: { image: { mimeType: 'image/png', dataURL: 'data:image/png;base64,iVBORw0KGgo=' } } }, null, 2);
+    const dessin = (version: string) => `---\nexcalidraw-plugin: parsed\n---\n# Excalidraw Data\n## Drawing\n\`\`\`json\n${json(version)}\n\`\`\`\n`;
+    // Les blocs compressés sont volontairement opaques : Cordée doit conserver chaque octet, sans les décoder.
+    const compresse = (version: string) => `---\nexcalidraw-plugin: parsed\n---\n# Excalidraw Data\n## Drawing\n\`\`\`compressed-json\n${version}+opaque/==\n\`\`\`\n`;
+    const formats = [
+      { chemin: 'dessins/schema.excalidraw.md', contenu: dessin },
+      { chemin: 'dessins/compresse.EXCALIDRAW.MD', contenu: compresse },
+      { chemin: 'dessins/ancien.excalidraw', contenu: json },
+    ];
+    const a = coffreMemoire(Object.fromEntries(formats.map(({ chemin, contenu }) => [chemin, contenu('base')]))), b = coffreMemoire();
+    const A = moteur(srv.url, cree.coffreId, cree.jeton, 'Agent A', a);
+    const B = moteur(srv.url, cree.coffreId, rejoint.jeton, 'Agent B', b);
+    await A.m.synchroniser(); await B.m.synchroniser();
+    const bases = new Set(Object.values(B.m.etat.bases));
+    const telechargements: string[] = [];
+    const telecharger = B.m.telecharger.bind(B.m);
+    B.m.telecharger = async (hash: string) => { telechargements.push(hash); return telecharger(hash); };
+    for (const { chemin, contenu } of formats) {
+      a.modifier(chemin, contenu('distant'));
+      b.modifier(chemin, contenu('local'));
+    }
+    await A.m.synchroniser(); await B.m.synchroniser(); await A.m.synchroniser();
+    for (const { chemin, contenu } of formats) {
+      assert.equal(b.texte(chemin), contenu('distant'));
+      assert.equal(a.texte(chemin), contenu('distant'));
+      const prefixe = chemin.replace(/\.excalidraw(?:\.md)?$/i, '');
+      const copie = b.chemins().find((p) => p.startsWith(prefixe + ' (conflit Agent B '));
+      assert.ok(copie, `copie attendue pour ${chemin}`);
+      assert.equal(b.texte(copie!), contenu('local'));
+      assert.equal(a.texte(copie!), contenu('local'), 'la copie est partagée aux autres membres');
+      assert.equal(B.m.etat.bases[chemin], await empreinte(versBuffer(contenu('distant'))));
+    }
+    assert.equal(telechargements.some((hash) => bases.has(hash)), false, 'aucun chargement de base pour une fusion de lignes');
+    assert.equal(B.signaux.filter((q) => q === 'conflit').length, formats.length);
+    const chemins = b.chemins();
+    await B.m.synchroniser();
+    assert.deepEqual(b.chemins(), chemins, 'une nouvelle synchro ne crée pas une seconde copie');
+  } finally {
+    await srv.arreter();
+  }
+});
+
 test('le garde-fou bloque la disparition massive de fichiers', async () => {
   const srv = await demarrer();
   try {
