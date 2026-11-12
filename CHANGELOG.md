@@ -1,5 +1,9 @@
 # Nouveautés
 
+## 0.4.18
+
+- **Discussion de la cordée** : une section « Discussion » dans le panneau. Entrée pour envoyer, Maj+Entrée pour aller à la ligne. Les messages arrivent en direct, avec une notification quand le panneau n’est pas visible. Commande « Ouvrir la discussion ». Demande le serveur à jour.
+
 ## 0.4.17
 
 - **Excalidraw** : pendant qu’on dessine, les enregistrements sont regroupés (envoi après 1,5 s de calme, au plus 5 s d’attente). Les notes partent toujours en 200 ms.
