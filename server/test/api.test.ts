@@ -115,6 +115,80 @@ test('invitation inconnue refusée, et les essais en rafale sont limités', asyn
   assert.equal(dernier, 429);
 });
 
+test('discussion : texte brut, accès au coffre, validation et notification sans révision', { timeout: 8000 }, async () => {
+  const s = await demarrer(), controleur = new AbortController();
+  try {
+    const alice = (await s.appel('POST', '/api/coffres', { nom: 'Discussion', prenom: 'Alice', codeCreation: CODE })).json;
+    const route = `/api/coffres/${alice.coffreId}`;
+    const code = (await s.appel('POST', route + '/invitations', {}, alice.jeton)).json.code;
+    const bruno = (await s.appel('POST', '/api/rejoindre', { code, prenom: 'Bruno' })).json;
+    const autre = (await s.appel('POST', '/api/coffres', { nom: 'Autre coffre', prenom: 'Alice', codeCreation: CODE })).json;
+    assert.equal((await s.appel('GET', route + '/messages')).statut, 401);
+    assert.equal((await s.appel('POST', route + '/messages', { texte: 'Bonjour' })).statut, 401);
+    for (const methode of ['GET', 'POST']) {
+      assert.equal((await s.appel(methode, route + '/messages', methode === 'POST' ? { texte: 'Intrus' } : undefined, autre.jeton)).statut, 403);
+    }
+    for (const texte of [undefined, null, 42, '', ' \n\t ', 'x'.repeat(2001)]) {
+      assert.equal((await s.appel('POST', route + '/messages', { texte }, alice.jeton)).statut, 400);
+    }
+    assert.equal((await s.appel('POST', route + '/messages', null, alice.jeton)).statut, 400);
+    const flux = await fetch(s.url + route + '/evenements', { headers: { Authorization: 'Bearer ' + bruno.jeton }, signal: controleur.signal });
+    const lecteur = flux.body!.getReader();
+    assert.match(new TextDecoder().decode((await lecteur.read()).value), /"rev":0/);
+    const envoi = await s.appel('POST', route + '/messages', { texte: '  <img src=x>\nBonjour Bruno !  ' }, alice.jeton);
+    assert.equal(envoi.statut, 201);
+    assert.equal(envoi.json.texte, '<img src=x>\nBonjour Bruno !');
+    assert.equal(envoi.json.auteur, 'Alice');
+    assert.equal(typeof envoi.json.auteurId, 'string');
+    assert.ok(envoi.json.le > 0);
+    const evenement = new TextDecoder().decode((await lecteur.read()).value);
+    assert.equal(evenement, `data: ${JSON.stringify({ message: envoi.json.id })}\n\n`);
+    assert.equal((await s.appel('GET', route + '?revision=1', undefined, alice.jeton)).json.rev, 0);
+    const reponse = await s.appel('POST', route + '/messages', { texte: 'x'.repeat(2000) }, bruno.jeton);
+    assert.equal(reponse.statut, 201);
+    const lecture = (await s.appel('GET', route + '/messages', undefined, bruno.jeton)).json;
+    assert.deepEqual(lecture.messages, [envoi.json, reponse.json]);
+    assert.equal(lecture.moiId, reponse.json.auteurId);
+    assert.equal(lecture.plus, false);
+    const suite = (await s.appel('GET', route + '/messages?depuis=' + envoi.json.id, undefined, alice.jeton)).json;
+    assert.deepEqual(suite.messages, [reponse.json]);
+    for (const depuis of ['-1', 'abc', '1.5', '', '9007199254740992']) {
+      assert.equal((await s.appel('GET', route + '/messages?depuis=' + depuis, undefined, alice.jeton)).statut, 400);
+    }
+    await s.appel('DELETE', route + '/membres/moi', undefined, bruno.jeton);
+    assert.equal((await s.appel('GET', route + '/messages', undefined, bruno.jeton)).statut, 403);
+    assert.equal((await s.appel('GET', route + '/messages', undefined, alice.jeton)).json.messages[1].auteur, 'Bruno');
+  } finally { controleur.abort(); await s.arreter(); }
+});
+
+test('discussion : 50 derniers messages, pagination chronologique et rafale propre à chaque membre', async () => {
+  const s = await demarrer();
+  try {
+    const alice = (await s.appel('POST', '/api/coffres', { nom: 'Discussion', prenom: 'Alice', codeCreation: CODE })).json;
+    const route = `/api/coffres/${alice.coffreId}`;
+    const code = (await s.appel('POST', route + '/invitations', {}, alice.jeton)).json.code;
+    const bruno = (await s.appel('POST', '/api/rejoindre', { code, prenom: 'Bruno' })).json;
+    const envoyes = [];
+    for (const ami of [alice, bruno]) {
+      for (let i = 0; i < 30; i++) {
+        const envoi = await s.appel('POST', route + '/messages', { texte: 'Message ' + i }, ami.jeton);
+        assert.equal(envoi.statut, 201); envoyes.push(envoi.json);
+      }
+      assert.equal((await s.appel('POST', route + '/messages', { texte: 'En trop' }, ami.jeton)).statut, 429);
+    }
+    const lire = async (parametres = '') => (await s.appel('GET', route + '/messages' + parametres, undefined, alice.jeton)).json;
+    assert.deepEqual((await lire()).messages, envoyes.slice(-50));
+    assert.deepEqual((await lire('?limite=3')).messages, envoyes.slice(-3));
+    const page1 = await lire('?depuis=0&limite=30');
+    const page2 = await lire('?depuis=' + page1.messages.at(-1).id + '&limite=30');
+    assert.equal(page1.plus, true); assert.equal(page2.plus, false);
+    assert.deepEqual([...page1.messages, ...page2.messages], envoyes);
+    assert.equal((await lire('?limite=99999')).messages.length, 60);
+    assert.equal((await lire('?limite=0')).messages.length, 1);
+    assert.deepEqual((await lire('?depuis=' + envoyes.at(-1).id)).messages, []);
+  } finally { await s.arreter(); }
+});
+
 test('derrière un proxy, chaque adresse a sa propre limite', async () => {
   const proxy = await demarrer({ derriereProxy: true });
   const essai = (ip: string) => fetch(proxy.url + '/api/rejoindre', {
@@ -407,7 +481,7 @@ test('l’activité est récente, filtrable par identifiant et limitée sans exp
   } finally { await s.arreter(); }
 });
 
-test('la migration des anciens membres préserve les jetons et les photos après redémarrage', async () => {
+test('la migration des anciens membres préserve les jetons, les photos et la discussion après redémarrage', async () => {
   const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'cordee-migration-profils-'));
   const base = path.join(dossier, 'cordee.db');
   const ancien = new DatabaseSync(base);
@@ -428,9 +502,13 @@ test('la migration des anciens membres préserve les jetons et les photos après
       const info = await (await fetch(url, { headers })).json();
       assert.equal(info.rev, 7);
       assert.equal(info.moiId, 'membre-test');
+      const discussion = await (await fetch(url + '/messages', { headers })).json();
+      assert.equal(discussion.messages.length, tour === 0 ? 0 : 1);
+      if (tour > 0) assert.equal(discussion.messages[0].texte, 'Bonjour Bruno');
       assert.equal(info.membres[0].avatar, tour === 0 ? null : PNG);
       assert.equal(info.membres[0].vu_le, tour === 1 ? vuLe : null, 'la date visible et le masquage survivent aux redémarrages');
       if (tour === 0) {
+        assert.equal((await fetch(url + '/messages', { method: 'POST', headers, body: JSON.stringify({ texte: 'Bonjour Bruno' }) })).status, 201);
         assert.equal((await fetch(url + '/profil', { method: 'PUT', headers, body: JSON.stringify({ avatar: PNG }) })).status, 200);
         await fetch(url + '/presence', { method: 'POST', headers, body: JSON.stringify({ chemin: null }) });
         vuLe = (await (await fetch(url, { headers })).json()).membres[0].vu_le;

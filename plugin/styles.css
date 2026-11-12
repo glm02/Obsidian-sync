@@ -513,3 +513,12 @@ button.cordee-evenement.cordee-evenement-court:not(.clickable-icon) { padding-bl
   .cordee-semaine .cordee-evenement-ligne { flex-direction: column; gap: var(--size-4-1); }
   .cordee-semaine .cordee-evenement-heure { width: auto; }
 }
+/* Les bulles suivent le thème ; le texte reste brut, y compris ses retours à la ligne. */
+.cordee-messages { display: flex; flex-direction: column; gap: var(--size-4-2); max-height: 320px; overflow-y: auto; padding: var(--size-4-2); }
+.cordee-message { align-self: flex-start; max-width: 88%; padding: var(--size-4-2) var(--size-4-3); border-radius: var(--radius-m); background: var(--background-secondary); overflow-wrap: anywhere; }
+.cordee-message-moi { align-self: flex-end; background: var(--background-modifier-hover); }
+.cordee-message-auteur { display: block; margin-bottom: var(--size-4-1); color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.cordee-message-texte { white-space: pre-wrap; user-select: text; }
+.cordee-discussion-saisie { display: flex; align-items: flex-end; gap: var(--size-4-2); }
+.cordee-discussion-saisie[hidden] { display: none; }
+.cordee-discussion-saisie textarea { flex: 1; min-width: 0; resize: vertical; }

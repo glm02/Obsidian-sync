@@ -9,6 +9,9 @@ function charger(etat, navigateur = {}) {
   const container = (racine = true) => ({
     enfants: [], attrs: {},
     style: {}, value: '', scrollTop: 0, scrollLeft: 0,
+    get scrollHeight() { return this.enfants.length * 40; },
+    focus() { rendu.focus = this; },
+    scrollIntoView() { rendu.defilement = this; },
     addClass(...classes) { this.classes = [...new Set([...(this.classes || (this.attrs.cls || '').split(' ').filter(Boolean)), ...classes])]; },
     removeClass(...classes) { this.classes = (this.classes || (this.attrs.cls || '').split(' ')).filter((cls) => !classes.includes(cls)); },
     querySelector(tag) { for (const enfant of this.enfants) { if (enfant.tag === tag) return enfant; const trouve = enfant.querySelector(tag); if (trouve) return trouve; } return null; },
@@ -694,8 +697,8 @@ test('changer de note met la présence à jour sans recharger l’activité', as
   const { plugin, rendu } = charger({ ...ETAT_TEST }); await plugin.onload();
   plugin.presence = [{ id: 'm1', nom: 'Membre test', chemin: 'avant.md' }];
   let appels = 0;
-  // La jauge de stockage a sa propre lecture : seules les lectures d'activité comptent ici.
-  plugin.moteur.api = async (methode, chemin) => { if (!String(chemin).endsWith('/stockage')) appels++; return { json: async () => ({ ...INFO_TEST, changements: [] }) }; };
+  // Le stockage et la discussion ont leur propre lecture : seule l'activité compte ici.
+  plugin.moteur.api = async (methode, chemin) => { if (String(chemin).includes('/activite')) appels++; return { json: async () => ({ ...INFO_TEST, changements: [] }) }; };
   await plugin.ruban.callback();
   const t = rendu.modal.tableau, membres = [...t.membresEl.children];
   plugin.presence = [{ id: 'm1', nom: 'Membre test', chemin: 'apres.md' }];
@@ -746,6 +749,212 @@ const JPEG_TEST = 'data:image/jpeg;base64,/9j/2Q==';
 const PNG_TEST = 'data:image/png;base64,iVBORw0KGgo=';
 const ETAT_TEST = { serveur: 'https://cordee.example', coffreId: 'test', jeton: 'test-token', prenom: 'Membre test' };
 const INFO_TEST = { rev: 1, moiId: 'm1', membres: [{ id: 'm1', nom: 'Membre test', arrive_le: 1700000000000, avatar: JPEG_TEST }] };
+
+async function bancDiscussion(messages = [], navigateur = {}) {
+  const banc = charger({ ...ETAT_TEST, prenom: 'Alice' }, navigateur);
+  await banc.plugin.onload();
+  const appels = [], stock = [...messages];
+  const api = async (methode, route, corps) => {
+    appels.push({ methode, route, corps });
+    if (route.includes('/messages')) {
+      if (methode === 'POST') {
+        const message = { id: (stock.at(-1)?.id || 0) + 1, auteurId: 'alice', auteur: 'Alice', texte: corps.texte, le: Date.now() };
+        stock.push(message); return { json: async () => message };
+      }
+      const depuis = new URL(route, 'https://cordee.example').searchParams.get('depuis');
+      const liste = depuis === null ? stock.slice(-50) : stock.filter(m => m.id > Number(depuis));
+      return { json: async () => ({ messages: liste.slice(0, 50), moiId: 'alice', plus: liste.length > 50 }) };
+    }
+    return { json: async () => ({ rev: 0, moiId: 'alice', changements: [], membres: [{ id: 'alice', nom: 'Alice' }, { id: 'bruno', nom: 'Bruno' }] }) };
+  };
+  banc.plugin.moteur.api = api;
+  return { ...banc, appels, stock, api };
+}
+
+test('discussion : bulles sûres, envoi par Entrée, Maj+Entrée et commande dédiée', async () => {
+  const { plugin, rendu, appels } = await bancDiscussion([
+    { id: 1, auteurId: 'alice', auteur: 'Alice', texte: '<img src=x onerror=alert(1)>', le: 1700000000000 },
+    { id: 2, auteurId: 'bruno', auteur: 'Bruno', texte: 'Bonjour Alice\nÀ demain !', le: 1700000001000 },
+  ]);
+  await rendu.commandes.get('discussion').callback();
+  const t = rendu.modal.tableau;
+  assert.equal(t.discussion.titre.textContent, 'Discussion');
+  assert.equal(t.discussion.corps.parentElement.tag, 'details');
+  assert.equal(rendu.focus, t.saisieDiscussion);
+  assert.equal(t.messagesEl.children[0].attrs.cls, 'cordee-message cordee-message-moi');
+  assert.equal(t.messagesEl.children[1].attrs.cls, 'cordee-message');
+  assert.match(t.messagesEl.children[1].children[0].textContent, /^Bruno · \d{2}:\d{2}$/);
+  assert.equal(t.messagesEl.children[0].children[1].textContent, '<img src=x onerror=alert(1)>');
+  assert.equal(t.messagesEl.children[1].children[1].textContent, 'Bonjour Alice\nÀ demain !');
+  assert.equal(t.messagesEl.querySelector('img'), null);
+  assert.equal(t.messagesEl.scrollTop, t.messagesEl.scrollHeight);
+  assert.deepEqual(rendu.notices, []);
+  t.saisieDiscussion.value = '  Salut Bruno\nÀ bientôt  ';
+  let empeche = 0;
+  await t.saisieDiscussion.onkeydown({ key: 'Enter', shiftKey: true, preventDefault() { empeche++; } });
+  await t.saisieDiscussion.onkeydown({ key: 'Enter', isComposing: true, preventDefault() { empeche++; } });
+  assert.equal(appels.filter(a => a.methode === 'POST').length, 0);
+  await t.saisieDiscussion.onkeydown({ key: 'Enter', preventDefault() { empeche++; } });
+  assert.equal(empeche, 1);
+  assert.equal(appels.find(a => a.methode === 'POST').corps.texte, 'Salut Bruno\nÀ bientôt');
+  assert.equal(t.saisieDiscussion.value, '');
+  assert.equal(t.messagesEl.children.length, 3);
+  assert.equal(t.messagesEl.scrollTop, t.messagesEl.scrollHeight);
+  t.discussion.corps.parentElement.open = false;
+  plugin.ouvrirPanneau = async () => {};
+  await rendu.commandes.get('discussion').callback();
+  assert.equal(t.discussion.corps.parentElement.open, true);
+  assert.equal(rendu.focus, t.saisieDiscussion);
+});
+
+test('discussion : validation locale et refus serveur gardent le brouillon', async () => {
+  const { plugin, rendu, appels, api } = await bancDiscussion();
+  await plugin.ruban.callback(); const t = rendu.modal.tableau;
+  for (const texte of [' \n ', 'x'.repeat(2001)]) {
+    t.saisieDiscussion.value = texte; await t.envoyerMessage();
+    assert.equal(t.saisieDiscussion.value, texte);
+    assert.equal(t.etatDiscussion.textContent, 'Écris entre 1 et 2000 caractères.');
+  }
+  assert.equal(appels.filter(a => a.methode === 'POST').length, 0);
+  plugin.moteur.api = async (methode, ...args) => {
+    if (methode !== 'POST') return api(methode, ...args);
+    const erreur = new Error('Trop de messages, réessaie dans une minute.'); erreur.statut = 429; throw erreur;
+  };
+  t.saisieDiscussion.value = 'Bonjour Bruno'; await t.envoyerMessage();
+  assert.equal(t.saisieDiscussion.value, 'Bonjour Bruno');
+  assert.match(t.etatDiscussion.textContent, /Trop de messages/);
+  assert.equal(t.envoyerDiscussion.disabled, false);
+  plugin.moteur.api = api; await t.envoyerMessage();
+  assert.equal(t.saisieDiscussion.value, '');
+});
+
+test('discussion : le sondage rattrape toutes les pages sans doublons ni effacer la saisie', async () => {
+  const { plugin, rendu, stock, appels } = await bancDiscussion();
+  await plugin.ruban.callback(); const t = rendu.modal.tableau;
+  t.saisieDiscussion.value = 'Brouillon pour Bruno';
+  for (let id = 1; id <= 105; id++) stock.push({ id, auteurId: 'bruno', auteur: 'Bruno', texte: 'Message ' + id, le: Date.now() });
+  plugin.ecouter(); await plugin.intervalle();
+  assert.equal(plugin.discussion.dernier, 105);
+  assert.equal(t.messagesEl.children.length, 50);
+  assert.equal(t.messagesEl.children[0].children[1].textContent, 'Message 56');
+  assert.equal(t.messagesEl.children.at(-1).children[1].textContent, 'Message 105');
+  assert.equal(t.saisieDiscussion.value, 'Brouillon pour Bruno');
+  assert.equal(t.messagesEl.scrollTop, t.messagesEl.scrollHeight);
+  assert.deepEqual(rendu.notices, [], 'le panneau visible suffit');
+  assert.ok(appels.some(a => a.route.endsWith('&depuis=50')));
+  assert.ok(appels.some(a => a.route.endsWith('&depuis=100')));
+  const bulles = [...t.messagesEl.children];
+  await plugin.intervalle();
+  assert.deepEqual(t.messagesEl.children, bulles, 'un sondage vide ne reconstruit pas les bulles');
+});
+
+test('discussion : le flux reçoit les messages et prévient seulement pour un ami hors du panneau', async () => {
+  let controle;
+  const { plugin, rendu, stock } = await bancDiscussion([
+    { id: 1, auteurId: 'bruno', auteur: 'Bruno', texte: 'Ancien message', le: Date.now() },
+  ], {
+    AbortController, setTimeout,
+    fetch: async (_, options) => new Response(new ReadableStream({ start(c) {
+      controle = c; options.signal.addEventListener('abort', () => c.error(Error('arrêt')));
+    } }), { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+  const synchros = []; plugin.programmer = ms => synchros.push(ms);
+  plugin.maintenirFlux(); await new Promise(setImmediate);
+  assert.equal(plugin.discussion.dernier, 1); assert.deepEqual(rendu.notices, []);
+  const envoyer = id => controle.enqueue(new TextEncoder().encode(`data: {"message":${id}}\n\n`));
+  stock.push({ id: 2, auteurId: 'bruno', auteur: 'Bruno', texte: 'Bonjour Alice\n' + 'x'.repeat(100), le: Date.now() });
+  envoyer(2); await new Promise(setImmediate);
+  assert.equal(plugin.discussion.dernier, 2);
+  assert.match(rendu.notice, /^Bruno : Bonjour Alice x+…$/);
+  assert.ok(rendu.notice.length < 100);
+  envoyer(2); await new Promise(setImmediate); assert.equal(rendu.notices.length, 1);
+  stock.push({ id: 3, auteurId: 'alice', auteur: 'Alice', texte: 'Mon message', le: Date.now() });
+  envoyer(3); await new Promise(setImmediate); assert.equal(rendu.notices.length, 1);
+  await plugin.ruban.callback(); const t = rendu.modal.tableau;
+  stock.push({ id: 4, auteurId: 'bruno', auteur: 'Bruno', texte: 'Panneau visible', le: Date.now() });
+  envoyer(4); await new Promise(setImmediate); assert.equal(rendu.notices.length, 1);
+  assert.equal(t.messagesEl.children.length, 4);
+  t.c.isShown = () => false;
+  stock.push({ id: 5, auteurId: 'bruno', auteur: 'Bruno', texte: 'Panneau masqué', le: Date.now() });
+  envoyer(5); await new Promise(setImmediate); assert.equal(rendu.notice, 'Bruno : Panneau masqué');
+  assert.deepEqual(synchros, [], 'le chat ne programme aucune synchro de fichiers');
+  const flux = plugin.fluxRevisions; plugin.onunload(); await flux.termine;
+});
+
+test('discussion : les anciens serveurs restent utilisables après un 404 en lecture ou envoi', async () => {
+  for (const methode404 of ['GET', 'POST']) {
+    const { plugin, rendu, api } = await bancDiscussion();
+    let tentatives = 0;
+    plugin.moteur.api = async (methode, route, corps) => {
+      if (route.includes('/messages') && methode === methode404) { tentatives++; const erreur = new Error('Route inconnue'); erreur.statut = 404; throw erreur; }
+      return api(methode, route, corps);
+    };
+    await plugin.ruban.callback(); const t = rendu.modal.tableau;
+    if (methode404 === 'POST') { t.saisieDiscussion.value = 'Bonjour Bruno'; await t.envoyerMessage(); }
+    assert.equal(t.etatDiscussion.textContent, 'Mets le serveur à jour pour discuter');
+    assert.equal(t.formulaireDiscussion.hidden, true);
+    assert.ok(rendu.boutons.has('Synchroniser'));
+    await plugin.rafraichirDiscussion(); assert.equal(tentatives, 1);
+    assert.equal(plugin.phase, 'pret');
+  }
+});
+
+test('discussion : un événement pendant la lecture est rattrapé, une réponse ancienne reste dans son coffre', async () => {
+  const { plugin, rendu, api, stock } = await bancDiscussion();
+  await plugin.ruban.callback(); const t = rendu.modal.tableau;
+  const attente = Promise.withResolvers();
+  plugin.moteur.api = async (methode, route, corps) => route.includes('/messages') ? attente.promise : api(methode, route, corps);
+  const chargement = plugin.rafraichirDiscussion();
+  stock.push({ id: 1, auteurId: 'bruno', auteur: 'Bruno', texte: 'Arrivé pendant la lecture', le: Date.now() });
+  assert.equal(plugin.rafraichirDiscussion(1), chargement);
+  plugin.moteur.api = api;
+  attente.resolve({ json: async () => ({ messages: [], moiId: 'alice' }) }); await chargement;
+  assert.equal(plugin.discussion.dernier, 1, 'un événement reçu pendant une réponse vide relance la lecture');
+  const retard = Promise.withResolvers();
+  plugin.moteur.api = () => retard.promise;
+  const ancien = plugin.rafraichirDiscussion();
+  plugin.etat.coffreId = 'autre';
+  retard.resolve({ json: async () => ({ messages: [{ id: 2, auteurId: 'bruno', auteur: 'Bruno', texte: 'Ne pas afficher', le: Date.now() }], moiId: 'alice' }) });
+  await ancien;
+  assert.equal(plugin.discussion.messages.length, 0);
+  assert.equal(rendu.textes.includes('Ne pas afficher'), false);
+  assert.deepEqual(rendu.notices, []);
+  t.detruire(); assert.equal(plugin.tableauxDiscussion.size, 0);
+});
+
+test('discussion : un envoi en cours garde les nouvelles frappes et ne part qu’une fois', async () => {
+  const { plugin, rendu, api } = await bancDiscussion();
+  await plugin.ruban.callback(); const t = rendu.modal.tableau;
+  const attente = Promise.withResolvers(); let envois = 0;
+  plugin.moteur.api = async (methode, route, corps) => {
+    if (methode !== 'POST') return api(methode, route, corps);
+    envois++; await attente.promise; return api(methode, route, corps);
+  };
+  t.saisieDiscussion.value = 'Premier'; const envoi = t.envoyerMessage();
+  await t.envoyerMessage(); assert.equal(envois, 1);
+  t.saisieDiscussion.value = 'Message suivant';
+  attente.resolve(); await envoi;
+  assert.equal(t.saisieDiscussion.value, 'Message suivant');
+  assert.equal(t.messagesEl.children[0].children[1].textContent, 'Premier');
+});
+
+test('discussion : le lecteur SSE distingue messages, révisions et données invalides', async () => {
+  const { interne } = charger({}, { AbortController, setTimeout });
+  const morceaux = ['data: {"mes', 'sage":4}\r\n\r\ndata: {"rev":2}\n\n',
+    'data: null\n\ndata: faux\n\ndata: {"message":0}\n\ndata: {"message":"5"}\n\ndata: {"message":-1}\n\n'];
+  const lire = async (recevoir, recevoirMessage) => interne.ecouterRevisions({
+    url: 'https://cordee.example/api/coffres/test/evenements', jeton: 'jeton-fictif', signal: new AbortController().signal,
+    recevoir, recevoirMessage,
+    requete: async () => new Response(new ReadableStream({ start(c) {
+      for (const morceau of morceaux) c.enqueue(new TextEncoder().encode(morceau)); c.close();
+    } }), { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+  const revisions = [], messages = [];
+  await lire(rev => revisions.push(rev), id => messages.push(id));
+  assert.deepEqual(revisions, [2]); assert.deepEqual(messages, [4]);
+  const anciennesRevisions = []; await lire(rev => anciennesRevisions.push(rev));
+  assert.deepEqual(anciennesRevisions, [2]);
+});
 
 function navigateurPhoto() {
   const appels = { revoque: 0, dessin: null };
