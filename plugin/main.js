@@ -467,7 +467,7 @@ async function enParallele(elements, limite, travail) {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.8';
+const VERSION = '0.4.9';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -1764,9 +1764,31 @@ function premierBlocModifie(diff, apres) {
 }
 
 function boutonCordee(c, texte, action, options = {}) {
-  const bouton = c.createEl('button', { text: texte, cls: 'cordee-bouton ' + (options.cls || ''), attr: { type: 'button', 'aria-label': options.label || texte, ...options.attr } });
+  // Avec une icône, le texte devient l'infobulle : la barre reste lisible même étroite.
+  const icone = options.icone && O?.setIcon;
+  const bouton = c.createEl('button', { text: icone ? '' : texte, cls: 'cordee-bouton ' + (icone ? 'cordee-bouton-icone ' : '') + (options.cls || ''), attr: { type: 'button', 'aria-label': options.label || texte, ...options.attr } });
+  if (icone) O.setIcon(bouton, options.icone);
   bouton.onclick = () => { if (!bouton.disabled) return action(); };
   return bouton;
+}
+
+// Sections du panneau repliables comme une FAQ ; l'état replié est retenu sur cet appareil.
+const CLE_SECTIONS = 'cordee.sections-fermees';
+function sectionsFermees() { try { return new Set(JSON.parse(globalThis.localStorage?.getItem(CLE_SECTIONS) || '[]')); } catch { return new Set(); } }
+function accordeon(parent, cle, titre) {
+  const d = parent.createEl('details', { cls: 'cordee-accordeon' });
+  d.open = !sectionsFermees().has(cle);
+  const entete = d.createEl('summary', { cls: 'cordee-section-titre' });
+  const h = entete.createEl('h3', { text: titre });
+  const actions = entete.createEl('span', { cls: 'cordee-section-actions' });
+  // Un clic sur un bouton de l'en-tête fait son action sans replier la section.
+  entete.addEventListener?.('click', (e) => { if (e.target?.closest?.('button')) e.preventDefault(); });
+  d.addEventListener?.('toggle', () => {
+    const fermees = sectionsFermees();
+    if (d.open) fermees.delete(cle); else fermees.add(cle);
+    try { globalThis.localStorage?.setItem(CLE_SECTIONS, JSON.stringify([...fermees])); } catch { /* préférence facultative */ }
+  });
+  return { titre: h, actions, corps: d.createEl('div', { cls: 'cordee-accordeon-corps' }) };
 }
 
 if (O) {
@@ -1963,47 +1985,49 @@ if (O) {
       c.empty();
       const tableau = c.createEl('div', { cls: 'cordee-tableau' });
       const entete = tableau.createEl('div', { cls: 'cordee-tableau-entete' });
-      const titres = entete.createEl('div');
-      titres.createEl('div', { text: 'CORDÉE', cls: 'cordee-surtitre' });
+      const titres = entete.createEl('div', { cls: 'cordee-titres' });
       titres.createEl('h2', { text: `Coffre partagé : ${plugin.etat.nomCoffre || 'Notre coffre'}`, cls: 'cordee-titre' });
       this.resumePresence = titres.createEl('p', { cls: 'cordee-presence-resume' });
       const commandes = entete.createEl('div', { cls: 'cordee-commandes' });
-      boutonCordee(commandes, 'Mon profil', () => new ProfilModal(app, plugin).open(), { cls: 'cordee-bouton-discret' });
       boutonCordee(commandes, 'Inviter', () => plugin.inviter(), { label: 'Créer une invitation', cls: 'cordee-bouton-principal' });
-      if (configurer) boutonCordee(commandes, 'Configurer', configurer, { cls: 'cordee-bouton-discret' });
+      boutonCordee(commandes, 'Mon profil', () => new ProfilModal(app, plugin).open(), { icone: 'user', cls: 'cordee-bouton-discret' });
+      if (configurer) boutonCordee(commandes, 'Configurer', configurer, { icone: 'settings', cls: 'cordee-bouton-discret' });
       const etat = tableau.createEl('div', { cls: 'cordee-tableau-etat' });
       const statut = etat.createEl('span', { cls: 'cordee-statut', attr: { role: 'status' } });
       const pause = boutonCordee(etat, '', () => plugin.mettreEnPause(!plugin.etat.enPause), { label: 'Pause ou reprise', cls: 'cordee-bouton-discret' });
-      boutonCordee(etat, 'Synchroniser', () => plugin.lancer({ forcer: true }), { cls: 'cordee-bouton-discret' });
+      boutonCordee(etat, 'Synchroniser', () => plugin.lancer({ forcer: true }), { icone: 'refresh-cw', cls: 'cordee-bouton-discret' });
       const attention = tableau.createEl('p', { cls: 'cordee-attention', attr: { role: 'status' } });
-      const jourTitre = tableau.createEl('div', { cls: 'cordee-section-titre' });
-      jourTitre.createEl('h3', { text: 'Aujourd’hui' });
-      boutonCordee(jourTitre, 'La semaine', () => plugin.ouvrirSemaine(), { cls: 'cordee-bouton-discret' });
-      this.aujourdhuiEl = tableau.createEl('div', { cls: 'cordee-aujourdhui-liste' });
+      const jour = accordeon(tableau, 'jour', 'Aujourd’hui');
+      boutonCordee(jour.actions, 'La semaine', () => plugin.ouvrirSemaine(), { icone: 'calendar-days', cls: 'cordee-bouton-discret' });
+      this.aujourdhuiEl = jour.corps.createEl('div', { cls: 'cordee-aujourdhui-liste' });
       this.desabonnerCalendrier = plugin.surCalendrier?.(() => this.afficherAujourdhui());
       this.chargementJour = this.afficherAujourdhui();
-      const voir = tableau.createEl('div', { cls: 'cordee-section-titre' });
-      this.titreAVoir = voir.createEl('h3', { text: 'À voir' });
-      this.boutonToutVu = boutonCordee(voir, 'Tout marquer comme vu', () => plugin.toutMarquerVu(), { cls: 'cordee-bouton-discret' });
-      this.aVoirEl = tableau.createEl('div', { cls: 'cordee-a-voir' });
+      const voir = accordeon(tableau, 'a-voir', 'À voir');
+      this.titreAVoir = voir.titre;
+      this.boutonToutVu = boutonCordee(voir.actions, 'Tout marquer comme vu', () => plugin.toutMarquerVu(), { icone: 'check-check', cls: 'cordee-bouton-discret' });
+      this.aVoirEl = voir.corps.createEl('div', { cls: 'cordee-a-voir' });
       this.desabonner = plugin.abonnerStatut(() => {
         this.afficherAVoir();
         rafraichirPresenceTableau(this);
         // Changer de note ne modifie que la présence, pas la liste d'activité.
         const presence = this.signaturePresence();
         if (this.revChargee !== undefined && plugin.phase !== 'synchro' && (plugin.etat.derniereRev !== this.revChargee || presence !== this.presenceChargee)) this.charger();
-        texteSiChange(statut, plugin.titreStatut()); attributSiChange(statut, 'title', plugin.titreStatut()); attributSiChange(statut, 'data-etat', plugin.etatCourt()); texteSiChange(pause, plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
-        attributSiChange(pause, 'aria-label', plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause');
+        texteSiChange(statut, plugin.titreStatut()); attributSiChange(statut, 'title', plugin.titreStatut()); attributSiChange(statut, 'data-etat', plugin.etatCourt()); 
+        const libellePause = plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause';
+        if (pause.getAttribute('aria-label') !== libellePause) {
+          if (O.setIcon) { pause.addClass?.('cordee-bouton-icone'); O.setIcon(pause, plugin.etat.enPause ? 'play' : 'pause'); } else texteSiChange(pause, libellePause);
+          attributSiChange(pause, 'aria-label', libellePause);
+        }
         texteSiChange(attention, plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
       });
-      const section = tableau.createEl('div', { cls: 'cordee-section-titre' });
-      section.createEl('h3', { text: 'Les membres' }); this.nombre = section.createEl('span', { cls: 'cordee-details' });
-      this.membresEl = tableau.createEl('div', { cls: 'cordee-collegues', attr: { 'aria-label': 'Filtrer par membre' } });
-      const activite = tableau.createEl('div', { cls: 'cordee-section-titre' });
-      this.titreActivite = activite.createEl('h3', { text: 'Derniers changements' });
-      boutonCordee(activite, 'Actualiser', () => this.charger(), { cls: 'cordee-bouton-discret' });
-      this.information = tableau.createEl('p', { cls: 'cordee-details' });
-      this.zone = tableau.createEl('div', { cls: 'cordee-fichiers', attr: { 'aria-live': 'polite' } });
+      const membres = accordeon(tableau, 'membres', 'Les membres');
+      this.nombre = membres.actions.createEl('span', { cls: 'cordee-details' });
+      this.membresEl = membres.corps.createEl('div', { cls: 'cordee-collegues', attr: { 'aria-label': 'Filtrer par membre' } });
+      const activite = accordeon(tableau, 'activite', 'Derniers changements');
+      this.titreActivite = activite.titre;
+      boutonCordee(activite.actions, 'Actualiser', () => this.charger(), { icone: 'rotate-cw', cls: 'cordee-bouton-discret' });
+      this.information = activite.corps.createEl('p', { cls: 'cordee-details' });
+      this.zone = activite.corps.createEl('div', { cls: 'cordee-fichiers', attr: { 'aria-live': 'polite' } });
       this.chargement = this.charger();
     }
     actif() { return !this.detruit && !this.plugin.arret && this.plugin.etat.coffreId === this.coffreId && this.plugin.etat.jeton === this.jeton; }

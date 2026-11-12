@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.9
+
+- **Panneau en accordéon** : Aujourd’hui, À voir, Les membres et Derniers changements s’ouvrent et se referment d’un clic ; l’état est retenu sur l’appareil.
+- **Icônes à la place du texte** pour Synchroniser, Pause, Mon profil, Configurer, La semaine, Tout marquer comme vu et Actualiser (le nom s’affiche en infobulle). Le statut de synchronisation n’est plus tronqué en « … ».
+- **Plus lisible sur ordinateur** : texte et boutons plus grands. Les membres sont rangés dans une grille régulière, et la barre d’état a un espace avant « en ligne ».
+
 ## 0.4.8
 
 - **Synchronisation beaucoup plus rapide** : les fichiers partent et arrivent 4 par 4 au lieu d’un par un. Les prochains fichiers reçus se téléchargent pendant l’écriture du fichier courant.

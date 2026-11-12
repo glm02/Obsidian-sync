@@ -315,3 +315,42 @@ textarea.cordee-geii-code:focus { outline: 1px solid var(--interactive-accent); 
 .cordee-section { border-top: 1px solid var(--background-modifier-border); padding: var(--size-4-2) 0; }
 .cordee-section > summary { cursor: pointer; font-weight: var(--font-semibold); padding: var(--size-4-1) 0; }
 .cordee-section[open] > summary { margin-bottom: var(--size-4-2); }
+
+/* ---------- 0.4.9 : panneau en accordéon, icônes, lisible sur ordinateur ---------- */
+/* Texte plus grand : la barre latérale d'Obsidian réduit tout, le panneau devenait minuscule. */
+.cordee-tableau { font-size: var(--font-ui-medium); gap: var(--size-4-3); }
+.cordee-tableau .cordee-titre, .cordee-vue .cordee-tableau .cordee-titre { font-size: var(--font-ui-larger, 1.25em); margin: 0; }
+.cordee-tableau .cordee-details, .cordee-tableau .cordee-presence-resume { font-size: var(--font-ui-small); }
+.cordee-tableau .cordee-bouton { font-size: var(--font-ui-medium); min-height: 34px; }
+.cordee-tableau-entete { align-items: center; }
+.cordee-titres { flex: 1 1 200px; min-width: 0; }
+
+/* Boutons-icônes : carrés, l'action est dans l'infobulle. */
+.cordee-bouton.cordee-bouton-icone { display: inline-flex; align-items: center; justify-content: center; width: 34px; min-width: 34px; height: 34px; padding: 0; }
+.cordee-bouton-icone svg { width: 18px; height: 18px; }
+
+/* Barre d'état : le texte prend toute la place, plus de « … » à cause des boutons. */
+.cordee-tableau-etat { grid-template-columns: minmax(0, 1fr) auto auto; }
+.cordee-statut { white-space: normal; overflow-wrap: anywhere; }
+
+/* Sections repliables comme une FAQ. */
+.cordee-accordeon { border-bottom: 1px solid var(--background-modifier-border); }
+.cordee-accordeon > summary { list-style: none; cursor: pointer; border-bottom: none; margin-top: 0; padding: var(--size-4-2) 0; user-select: none; }
+.cordee-accordeon > summary::-webkit-details-marker { display: none; }
+.cordee-accordeon > summary h3 { display: flex; align-items: center; gap: var(--size-4-2); font-size: var(--font-ui-large, 1.1em); }
+.cordee-accordeon > summary h3::before { content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid var(--text-muted); border-bottom: 2px solid var(--text-muted); transform: rotate(-45deg); transition: transform .15s ease; }
+.cordee-accordeon[open] > summary h3::before { transform: rotate(45deg); }
+.cordee-accordeon > summary:hover h3 { color: var(--text-accent); }
+.cordee-section-actions { display: inline-flex; align-items: center; gap: var(--size-4-2); }
+.cordee-accordeon-corps { display: flex; flex-direction: column; gap: var(--size-4-2); padding-bottom: var(--size-4-3); }
+
+/* Membres : grille régulière au lieu de pastilles de tailles inégales. */
+.cordee-collegues { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.cordee-collegue { width: 100%; min-width: 0; border-radius: var(--radius-l); }
+.cordee-collegue > * { min-width: 0; }
+
+/* Aujourd'hui : colonne horaire plus étroite, le titre a la place. */
+.cordee-evenement-heure { min-width: 0; width: 5.5em; }
+
+/* Barre d'état d'Obsidian : espace avant « en ligne ». */
+.cordee-presence-barre { margin-inline-start: var(--size-4-1); }
