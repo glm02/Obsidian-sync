@@ -588,7 +588,7 @@ function httpObsidian({ methode, url, entetes, corps, type }) {
 }
 
 /** Notifications uniquement : les contenus continuent de passer par requestUrl. */
-async function ecouterRevisions({ url, jeton, signal, recevoir, ouvert = () => {}, requete = globalThis.fetch }) {
+async function ecouterRevisions({ url, jeton, signal, recevoir, recevoirMessage = () => {}, ouvert = () => {}, requete = globalThis.fetch }) {
   const controleur = new AbortController();
   const arreter = () => controleur.abort();
   signal.addEventListener('abort', arreter, { once: true });
@@ -617,9 +617,10 @@ async function ecouterRevisions({ url, jeton, signal, recevoir, ouvert = () => {
         const message = tampon.slice(0, fin); tampon = tampon.slice(fin + 2);
         const donnees = message.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('\n');
         if (!donnees) continue;
-        let rev;
-        try { rev = JSON.parse(donnees).rev; } catch { continue; }
+        let rev, id;
+        try { const evenement = JSON.parse(donnees); rev = evenement?.rev; id = evenement?.message; } catch { continue; }
         if (Number.isSafeInteger(rev) && rev >= 0 && !signal.aborted) recevoir(rev);
+        if (Number.isSafeInteger(id) && id > 0 && !signal.aborted) recevoirMessage(id);
       }
     }
   } finally {
@@ -728,6 +729,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.phase = 'pret';
     this.derniereErreur = '';
     this.abonnesStatut = new Set();
+    this.tableauxDiscussion = new Set();
     this.fichiersTropGros = new Set();
     this.fichiersBloques = new Map();
     this.dossiersEnAttente = new Set();
@@ -756,6 +758,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.addRibbonIcon('calendar-days', 'Cordée — la semaine', () => this.ouvrirSemaine());
     this.addRibbonIcon('cordee-logo', 'Cordée — ouvrir le partage', () => this.ouvrirPanneau());
     this.addCommand({ id: 'ouvrir', name: 'Ouvrir le panneau', callback: () => this.ouvrirPanneau() });
+    this.addCommand({ id: 'discussion', name: 'Ouvrir la discussion', callback: () => this.ouvrirDiscussion() });
     this.addCommand({ id: 'historique', name: 'Historique de cette note', callback: () => { const f = this.app.workspace.getActiveFile?.(); if (f) new HistoriqueModal(this.app, this, f.path).open(); else new O.Notice('Ouvre d’abord une note.'); } });
     this.addCommand({ id: 'semaine', name: 'Ouvrir la semaine', callback: () => this.ouvrirSemaine() });
     this.addCommand({ id: 'cours-moodle', name: 'Cours Moodle', callback: () => new CoursMoodleModal(this.app, this).open() });
@@ -905,6 +908,72 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     let leaf = ws.getLeavesOfType(VUE_CORDEE)[0];
     if (!leaf) { leaf = ws.getRightLeaf(false); await leaf.setViewState({ type: VUE_CORDEE, active: true }); }
     ws.revealLeaf(leaf);
+  }
+
+  async ouvrirDiscussion() {
+    await this.ouvrirPanneau();
+    for (const tableau of this.tableauxDiscussion) {
+      if (!tableau.actif()) continue;
+      tableau.discussion.corps.parentElement.open = true;
+      tableau.discussion.corps.scrollIntoView?.({ block: 'nearest' });
+      tableau.saisieDiscussion.focus?.();
+    }
+  }
+
+  discussionCourante() {
+    const cle = JSON.stringify([this.etat.serveur, this.etat.coffreId, this.etat.jeton]);
+    // Le contenu reste en mémoire et ne traverse jamais un changement de coffre ou de compte.
+    if (this.discussion?.cle !== cle) this.discussion = { cle, messages: [], dernier: 0, chargee: false, cible: 0 };
+    return this.discussion;
+  }
+
+  afficherDiscussion() {
+    for (const tableau of this.tableauxDiscussion) if (tableau.actif()) tableau.afficherDiscussion();
+  }
+
+  rafraichirDiscussion(cible = 0) {
+    if (this.arret || !this.connecte()) return Promise.resolve();
+    const discussion = this.discussionCourante();
+    discussion.cible = Math.max(discussion.cible, cible);
+    if (discussion.ancienne) return Promise.resolve();
+    if (discussion.chargement) return discussion.chargement;
+    const coffreId = this.etat.coffreId;
+    const courant = () => !this.arret && this.discussionCourante() === discussion;
+    discussion.chargement = (async () => {
+      try {
+        let suite;
+        do {
+          const cibleAvant = discussion.cible;
+          const depuis = discussion.chargee ? discussion.dernier : null;
+          const info = await (await this.moteur.api('GET', `/api/coffres/${coffreId}/messages?limite=50${depuis === null ? '' : '&depuis=' + depuis}`)).json();
+          if (!courant()) return;
+          if (!Array.isArray(info.messages)) { const erreur = new Error('Ancien serveur'); erreur.statut = 404; throw erreur; }
+          discussion.moiId = info.moiId;
+          const nouveaux = info.messages.filter((m) => Number.isSafeInteger(m.id) && m.id > discussion.dernier && typeof m.texte === 'string');
+          const prevenir = discussion.chargee;
+          discussion.messages = [...discussion.messages, ...nouveaux].slice(-50);
+          if (nouveaux.length) discussion.dernier = nouveaux[nouveaux.length - 1].id;
+          discussion.chargee = true; discussion.erreur = '';
+          const visible = [...this.tableauxDiscussion].some((t) => t.discussionVisible());
+          if (prevenir && !visible) for (const message of nouveaux) {
+            if (message.auteurId !== discussion.moiId) {
+              const debut = message.texte.replace(/\s+/g, ' ').slice(0, 80);
+              new O.Notice(`${message.auteur || 'Membre'} : ${debut}${message.texte.length > 80 ? '…' : ''}`, 5000);
+            }
+          }
+          this.afficherDiscussion();
+          // Un événement reçu pendant la lecture relance le rattrapage sans requête concurrente.
+          suite = (nouveaux.length && depuis !== null && info.plus)
+            || (discussion.dernier < discussion.cible && (nouveaux.length || cibleAvant < discussion.cible));
+        } while (suite && courant());
+      } catch (erreur) {
+        if (!courant()) return;
+        if (erreur.statut === 404) discussion.ancienne = true;
+        else discussion.erreur = expliquerErreur(erreur);
+        this.afficherDiscussion();
+      }
+    })().finally(() => { discussion.chargement = null; });
+    return discussion.chargement;
   }
 
   /* ---------- Présence : qui a quelle note ouverte ---------- */
@@ -1393,8 +1462,9 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.fluxRevisions = flux;
     flux.termine = ecouterRevisions({
       url: this.moteur.url(this.moteur.racine() + '/evenements'), jeton: this.etat.jeton, signal: flux.controleur.signal,
-      ouvert: () => { if (this.fluxRevisions === flux) flux.connecte = true; },
+      ouvert: () => { if (this.fluxRevisions === flux) { flux.connecte = true; this.rafraichirDiscussion(); } },
       recevoir: (rev) => { if (this.fluxRevisions === flux && rev > this.etat.derniereRev) this.programmer(0); },
+      recevoirMessage: (id) => { if (this.fluxRevisions === flux) this.rafraichirDiscussion(id); },
     }).catch(() => { /* requestUrl prend le relais si le flux est bloqué sur cet appareil. */ }).finally(() => {
       if (this.fluxRevisions !== flux) return;
       this.fluxRevisions = null;
@@ -1422,6 +1492,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
           if (this.sourceErreur === 'sondage') { this.derniereErreur = ''; this.phase = 'pret'; }
           this.afficher();
         }
+        if (courant()) await this.rafraichirDiscussion();
       } catch (erreur) { if (courant() && this.sourceErreur !== 'synchro') this.signalerErreur(erreur, 'sondage'); }
       finally { this.ecouteEnCours = false; }
     }, 2500));
@@ -2196,6 +2267,18 @@ if (O) {
         }
         texteSiChange(attention, plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
       });
+      this.discussion = accordeon(tableau, 'discussion', 'Discussion');
+      this.messagesEl = this.discussion.corps.createEl('div', { cls: 'cordee-messages', attr: { role: 'log', 'aria-label': 'Messages de la cordée', 'aria-live': 'polite' } });
+      this.etatDiscussion = this.discussion.corps.createEl('p', { cls: 'cordee-details', attr: { role: 'status' } });
+      this.formulaireDiscussion = this.discussion.corps.createEl('div', { cls: 'cordee-discussion-saisie' });
+      this.saisieDiscussion = this.formulaireDiscussion.createEl('textarea', { attr: { rows: '2', maxlength: '2000', placeholder: 'Écris à ta cordée…', 'aria-label': 'Ton message' } });
+      this.envoyerDiscussion = boutonCordee(this.formulaireDiscussion, 'Envoyer', () => this.envoyerMessage(), { cls: 'cordee-bouton-discret' });
+      this.saisieDiscussion.onkeydown = (e) => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); return this.envoyerMessage(); }
+      };
+      plugin.tableauxDiscussion.add(this);
+      this.afficherDiscussion();
+      this.chargementDiscussion = plugin.rafraichirDiscussion();
       const membres = accordeon(tableau, 'membres', 'Membres');
       this.nombre = membres.actions.createEl('span', { cls: 'cordee-details' });
       this.membresEl = membres.corps.createEl('div', { cls: 'cordee-collegues', attr: { 'aria-label': 'Filtrer par membre' } });
@@ -2206,9 +2289,52 @@ if (O) {
       this.recherche.oninput = () => this.filtrerChemins();
       this.information = activite.corps.createEl('p', { cls: 'cordee-details' });
       this.zone = activite.corps.createEl('div', { cls: 'cordee-fichiers', attr: { 'aria-live': 'polite' } });
-      this.chargement = this.charger();
+      this.chargement = Promise.all([this.charger(), this.chargementDiscussion]);
     }
     actif() { return !this.detruit && !this.plugin.arret && this.plugin.etat.coffreId === this.coffreId && this.plugin.etat.jeton === this.jeton; }
+    discussionVisible() {
+      if (!this.actif() || globalThis.document?.hidden || !this.discussion.corps.parentElement.open) return false;
+      return this.c.isShown ? this.c.isShown() : this.c.getClientRects ? this.c.getClientRects().length > 0 : this.c.isConnected !== false;
+    }
+    afficherDiscussion() {
+      if (!this.actif()) return;
+      const discussion = this.plugin.discussionCourante();
+      const signature = JSON.stringify([discussion.messages, discussion.moiId]);
+      // La saisie et son curseur survivent aux messages reçus et au sondage.
+      if (signature !== this.signatureDiscussion) {
+        this.signatureDiscussion = signature;
+        this.messagesEl.empty();
+        for (const message of discussion.messages) {
+          const bulle = this.messagesEl.createEl('div', { cls: 'cordee-message' + (message.auteurId === discussion.moiId ? ' cordee-message-moi' : '') });
+          bulle.createEl('span', { cls: 'cordee-message-auteur' }).setText(`${message.auteur || 'Membre'} · ${heure(message.le)}`);
+          bulle.createEl('div', { cls: 'cordee-message-texte' }).setText(message.texte);
+        }
+        this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      }
+      texteSiChange(this.etatDiscussion, discussion.ancienne ? 'Mets le serveur à jour pour discuter' : discussion.erreur || (!discussion.chargee ? 'Chargement de la discussion…' : !discussion.messages.length ? 'Écris le premier message.' : ''));
+      this.formulaireDiscussion.hidden = !!discussion.ancienne;
+    }
+    async envoyerMessage() {
+      if (!this.actif() || this.envoiMessage) return;
+      const texte = this.saisieDiscussion.value.trim();
+      if (!texte.length || texte.length > 2000) { this.etatDiscussion.setText('Écris entre 1 et 2000 caractères.'); return; }
+      const discussion = this.plugin.discussionCourante();
+      const brouillon = this.saisieDiscussion.value;
+      this.envoiMessage = true; this.envoyerDiscussion.disabled = true;
+      try {
+        const message = await (await this.plugin.moteur.api('POST', `/api/coffres/${this.coffreId}/messages`, { texte })).json();
+        if (!this.actif() || this.plugin.discussionCourante() !== discussion) return;
+        // Une frappe pendant l'envoi appartient au prochain message.
+        if (this.saisieDiscussion.value === brouillon) this.saisieDiscussion.value = '';
+        discussion.moiId = message.auteurId;
+        await this.plugin.rafraichirDiscussion(message.id);
+        if (this.actif()) this.saisieDiscussion.focus?.();
+      } catch (erreur) {
+        if (!this.actif()) return;
+        if (erreur.statut === 404) { discussion.ancienne = true; this.plugin.afficherDiscussion(); }
+        else this.etatDiscussion.setText(erreur.statut === 429 ? 'Trop de messages. Patiente une minute.' : expliquerErreur(erreur));
+      } finally { this.envoiMessage = false; this.envoyerDiscussion.disabled = false; }
+    }
     signaturePresence() { return JSON.stringify((this.plugin.presence || []).map((p) => [p.id, p.nom])); }
     filtrerChemins() {
       // Filtrer les cartes déjà reçues évite une requête à chaque frappe.
@@ -2369,7 +2495,7 @@ if (O) {
         else { this.zone.empty(); this.zone.createEl('p', { text: expliquerErreur(erreur), cls: 'cordee-vide' }); }
       } }
     }
-    detruire() { this.detruit = true; ++this.tour; this.desabonner?.(); this.desabonnerCalendrier?.(); }
+    detruire() { this.detruit = true; ++this.tour; this.plugin.tableauxDiscussion.delete(this); this.desabonner?.(); this.desabonnerCalendrier?.(); }
   }
 
   /** Toutes les versions d'une note : qui, quand, combien de lignes ; un clic compare et permet de restaurer. */

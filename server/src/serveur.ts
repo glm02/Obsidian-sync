@@ -101,6 +101,10 @@ export function creerServeur(opts: Options) {
       supprime INTEGER NOT NULL, auteur TEXT NOT NULL, le INTEGER NOT NULL, type TEXT NOT NULL DEFAULT 'fichier', PRIMARY KEY (coffre_id, rev));
     CREATE TABLE IF NOT EXISTS dossiers (coffre_id TEXT NOT NULL, chemin TEXT NOT NULL, rev INTEGER NOT NULL,
       supprime INTEGER NOT NULL, auteur TEXT NOT NULL, modifie_le INTEGER NOT NULL, PRIMARY KEY (coffre_id, chemin));
+    CREATE TABLE IF NOT EXISTS messages (id INTEGER PRIMARY KEY AUTOINCREMENT, coffre_id TEXT NOT NULL REFERENCES coffres(id),
+      auteur TEXT NOT NULL REFERENCES membres(id), texte TEXT NOT NULL, le INTEGER NOT NULL);
+    CREATE INDEX IF NOT EXISTS messages_coffre_id ON messages (coffre_id, id);
+    CREATE INDEX IF NOT EXISTS messages_auteur_le ON messages (auteur, le);
   `);
   // Migration additive : les coffres et les jetons des installations existantes restent valables.
   const colonnesMembres = db.prepare('PRAGMA table_info(membres)').all() as Array<{ name: string }>;
@@ -340,6 +344,38 @@ export function creerServeur(opts: Options) {
         if (url.searchParams.get('revision') === '1') return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev, presence: presenceDu(coffreId, moi.id) });
         const membres = membresDuCoffre(coffreId);
         return envoyer(res, 200, { id: coffre.id, nom: coffre.nom, rev: coffre.rev, moi: moi.nom, moiId: moi.id, membres });
+      }
+
+      if (m === 'GET' && sous === '/messages') {
+        const parametre = url.searchParams.get('depuis');
+        const depuis = parametre === null ? null : Number(parametre);
+        if (depuis !== null && (!/^\d+$/.test(parametre!) || !Number.isSafeInteger(depuis) || depuis < 0)) {
+          throw new ErreurHttp(400, 'Identifiant de message invalide.');
+        }
+        const demande = Number(url.searchParams.get('limite') || 50);
+        const limite = Number.isFinite(demande) ? Math.max(1, Math.min(100, Math.floor(demande))) : 50;
+        // Sans curseur : les derniers messages ; avec curseur : aucune lacune au rattrapage.
+        const lignes = db.prepare(`SELECT m.id, m.texte, m.le, m.auteur AS auteurId, mb.nom AS auteur
+          FROM messages m JOIN membres mb ON mb.id = m.auteur WHERE m.coffre_id = ? ${depuis === null ? '' : 'AND m.id > ?'}
+          ORDER BY m.id ${depuis === null ? 'DESC' : 'ASC'} LIMIT ?`)
+          .all(...(depuis === null ? [coffreId, limite + 1] : [coffreId, depuis, limite + 1]));
+        const messages = lignes.slice(0, limite);
+        if (depuis === null) messages.reverse();
+        return envoyer(res, 200, { messages, moiId: moi.id, plus: lignes.length > limite });
+      }
+
+      if (m === 'POST' && sous === '/messages') {
+        const b = await lireJson(req);
+        const texte = typeof b?.texte === 'string' ? b.texte.trim() : '';
+        if (!texte.length || texte.length > 2000) throw new ErreurHttp(400, 'Écris entre 1 et 2000 caractères.');
+        const le = maintenant();
+        // La fenêtre glissante persiste au redémarrage et reste propre à chaque membre.
+        const compte = db.prepare('SELECT COUNT(*) AS n FROM messages WHERE auteur = ? AND le > ?').get(moi.id, le - 60_000) as { n: number };
+        if (compte.n >= 30) throw new ErreurHttp(429, 'Trop de messages, réessaie dans une minute.');
+        const id = Number(db.prepare('INSERT INTO messages (coffre_id, auteur, texte, le) VALUES (?, ?, ?, ?)').run(coffreId, moi.id, texte, le).lastInsertRowid);
+        // Les anciens clients ne lisent que « rev » et ignorent donc cette notification.
+        for (const abonne of abonnes.get(coffreId) ?? []) abonne.write(`data: ${JSON.stringify({ message: id })}\n\n`);
+        return envoyer(res, 201, { id, auteurId: moi.id, auteur: moi.nom, texte, le });
       }
 
       // Place prise par ce coffre et place libre sur le disque du serveur, pour la jauge de l'extension.
