@@ -1466,6 +1466,8 @@ function resumePresence(membres, presence, moiId, maintenant = Date.now()) {
 function afficherBarrePresence(barre, texte, noms) {
   const suite = noms.length ? `${noms.slice(0, 2).join(', ')}${noms.length > 2 ? '…' : ''} en ligne` : '';
   if (!barre.createEl) { barre.setText(texte + (suite ? ` · ${suite}` : '')); return; }
+  barre.addClass?.('cordee-barre');
+  barre.setAttribute?.('title', texte + (suite ? ` · ${suite}` : ''));
   barre.setText(texte);
   if (suite) {
     barre.createEl('span', { text: ' · ' });
@@ -1800,11 +1802,24 @@ function premierBlocModifie(diff, apres) {
   return { de: { line: premiere, ch: 0 }, a: { line: derniere, ch: lignesApres[derniere]?.length || 0 } };
 }
 
+function afficherIconeBouton(bouton, nom, texte) {
+  // Le catalogue d'icônes dépend de la version d'Obsidian : une icône inconnue ne doit jamais laisser une action vide.
+  bouton.empty();
+  try { O?.setIcon?.(bouton, nom); } catch { /* Le libellé reste utilisable si le thème ou l'API refuse l'icône. */ }
+  const svg = bouton.querySelector?.('svg');
+  if (svg) {
+    // La classe native évite les marges intérieures des boutons texte d'Obsidian, qui compriment le SVG.
+    bouton.addClass('clickable-icon', 'cordee-bouton-icone');
+    svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false');
+  } else {
+    bouton.removeClass?.('clickable-icon', 'cordee-bouton-icone');
+    bouton.setText(texte);
+  }
+}
+
 function boutonCordee(c, texte, action, options = {}) {
-  // Avec une icône, le texte devient l'infobulle : la barre reste lisible même étroite.
-  const icone = options.icone && O?.setIcon;
-  const bouton = c.createEl('button', { text: icone ? '' : texte, cls: 'cordee-bouton ' + (icone ? 'cordee-bouton-icone ' : '') + (options.cls || ''), attr: { type: 'button', 'aria-label': options.label || texte, ...options.attr } });
-  if (icone) O.setIcon(bouton, options.icone);
+  const bouton = c.createEl('button', { text: texte, cls: 'cordee-bouton ' + (options.cls || ''), attr: { type: 'button', 'aria-label': options.label || texte, title: options.label || texte, ...options.attr } });
+  if (options.icone) afficherIconeBouton(bouton, options.icone, texte);
   bouton.onclick = (evt) => { if (!bouton.disabled) return action(evt); };
   return bouton;
 }
@@ -2054,13 +2069,13 @@ if (O) {
       boutonCordee(etat, 'Synchroniser', () => plugin.lancer({ forcer: true }), { icone: 'refresh-cw', cls: 'cordee-bouton-discret' });
       const attention = tableau.createEl('p', { cls: 'cordee-attention', attr: { role: 'status' } });
       const jour = accordeon(tableau, 'jour', 'Aujourd’hui');
-      boutonCordee(jour.actions, 'La semaine', () => plugin.ouvrirSemaine(), { icone: 'calendar-days', cls: 'cordee-bouton-discret' });
+      boutonCordee(jour.actions, 'La semaine', () => plugin.ouvrirSemaine(), { icone: 'calendar', cls: 'cordee-bouton-discret' });
       this.aujourdhuiEl = jour.corps.createEl('div', { cls: 'cordee-aujourdhui-liste' });
       this.desabonnerCalendrier = plugin.surCalendrier?.(() => this.afficherAujourdhui());
       this.chargementJour = this.afficherAujourdhui();
       const voir = accordeon(tableau, 'a-voir', 'À voir');
       this.titreAVoir = voir.titre;
-      this.boutonToutVu = boutonCordee(voir.actions, 'Tout marquer comme vu', () => plugin.toutMarquerVu(), { icone: 'check-check', cls: 'cordee-bouton-discret' });
+      this.boutonToutVu = boutonCordee(voir.actions, 'Tout vu', () => plugin.toutMarquerVu(), { label: 'Tout marquer comme vu', icone: 'check', cls: 'cordee-bouton-discret' });
       this.aVoirEl = voir.corps.createEl('div', { cls: 'cordee-a-voir' });
       this.desabonner = plugin.abonnerStatut(() => {
         this.afficherAVoir();
@@ -2071,12 +2086,13 @@ if (O) {
         texteSiChange(statut, plugin.titreStatut()); attributSiChange(statut, 'title', plugin.titreStatut()); attributSiChange(statut, 'data-etat', plugin.etatCourt()); 
         const libellePause = plugin.etat.enPause ? 'Reprendre' : 'Mettre en pause';
         if (pause.getAttribute('aria-label') !== libellePause) {
-          if (O.setIcon) { pause.addClass?.('cordee-bouton-icone'); O.setIcon(pause, plugin.etat.enPause ? 'play' : 'pause'); } else texteSiChange(pause, libellePause);
+          afficherIconeBouton(pause, plugin.etat.enPause ? 'play' : 'pause', libellePause);
           attributSiChange(pause, 'aria-label', libellePause);
+          attributSiChange(pause, 'title', libellePause);
         }
         texteSiChange(attention, plugin.derniereErreur || plugin.texteBloques?.() || (plugin.suppressionsBloquees ? `${plugin.suppressionsBloquees} suppressions attendent ta confirmation (commande « Confirmer les suppressions en attente »).` : plugin.fichiersTropGros.size ? `${plugin.fichiersTropGros.size} fichier(s) de plus de 50 Mo n’ont pas été envoyés.` : '')); attention.hidden = !attention.textContent;
       });
-      const membres = accordeon(tableau, 'membres', 'Les membres');
+      const membres = accordeon(tableau, 'membres', 'Membres');
       this.nombre = membres.actions.createEl('span', { cls: 'cordee-details' });
       this.membresEl = membres.corps.createEl('div', { cls: 'cordee-collegues', attr: { 'aria-label': 'Filtrer par membre' } });
       const activite = accordeon(tableau, 'activite', 'Derniers changements');
@@ -2101,7 +2117,7 @@ if (O) {
       const restants = evts.filter((e) => !estEcheance(e) && e.fin > maintenant && e.debut < minuit.getTime()).slice(0, 4);
       const echeances = evts.filter((e) => estEcheance(e) && e.debut >= maintenant).slice(0, 3);
       if (!restants.length && !echeances.length) {
-        zone.createEl('p', { text: p.etat.calendriers.length ? 'Plus rien de prévu aujourd’hui, et aucun devoir à rendre cette semaine.' : 'Ajoute ton emploi du temps et Moodle dans les réglages de Cordée pour voir ta journée ici.', cls: 'cordee-vide' });
+        zone.createEl('p', { text: p.etat.calendriers.length ? 'Rien à venir, aucun devoir cette semaine.' : 'Ajoute tes calendriers dans les réglages.', cls: 'cordee-vide' });
         return;
       }
       for (const e of [...restants, ...echeances]) {
@@ -2130,11 +2146,11 @@ if (O) {
       zone.empty();
       this.boutonToutVu.hidden = !entrees.length;
       this.titreAVoir.setText(entrees.length ? `À voir (${entrees.length})` : 'À voir');
-      if (!entrees.length) { zone.createEl('p', { text: 'Rien de nouveau : tu as tout vu.', cls: 'cordee-vide' }); return; }
+      if (!entrees.length) { zone.createEl('p', { text: 'Tu as tout vu.', cls: 'cordee-vide' }); return; }
       for (const [chemin, e] of entrees.slice(0, 30)) {
         const ligne = zone.createEl('div', { cls: 'cordee-a-voir-ligne' + (e.ouvert ? '' : ' cordee-non-ouvert') });
         ligne.style?.setProperty?.('--cordee-couleur', couleurAuteur(e.auteurs?.[0]));
-        const ouvrir = boutonCordee(ligne, '', async () => { try { await p.ouvrirModif(chemin); } catch { new O.Notice(`Impossible d’ouvrir ${chemin}.`); } }, { label: `Ouvrir ${chemin} sur les modifications`, cls: 'cordee-a-voir-ouvrir' });
+        const ouvrir = boutonCordee(ligne, '', async () => { try { await p.ouvrirModif(chemin); } catch { new O.Notice(`Impossible d’ouvrir ${chemin}.`); } }, { label: `Ouvrir ${chemin} sur les modifications`, cls: 'cordee-a-voir-ouvrir', attr: { title: chemin } });
         const tete = ouvrir.createEl('span', { cls: 'cordee-fichier-tete' });
         tete.createEl('strong', { text: nomFichier(chemin), cls: 'cordee-fichier-chemin' });
         if (dossierDe(chemin)) tete.createEl('span', { text: dossierDe(chemin), cls: 'cordee-fichier-dossier' });
@@ -2168,7 +2184,6 @@ if (O) {
         this.membresPresence = info.membres; this.moiPresence = info.moiId; this.lignesPresence = [];
         if (!this.tous) {
           this.tous = boutonCordee(this.membresEl, 'Tous', () => { this.filtre = null; return this.charger(); }, { cls: 'cordee-collegue cordee-collegue-tous' });
-          this.tous.createEl('span', { text: 'Toute la cordée', cls: 'cordee-details' });
         }
         attributSiChange(this.tous, 'aria-pressed', String(!filtre));
         const membres = new Map(), elementsMembres = [this.tous];
@@ -2182,9 +2197,9 @@ if (O) {
               const actuel = ligne?.membre || membre;
               if (!O.Menu) return filtrer();
               const menu = new O.Menu();
-              menu.addItem((i) => i.setTitle('Voir sa fiche').setIcon('id-card').onClick(() => new FicheMembreModal(this.app, this.plugin, actuel, { statut: ligne?.statut?.textContent || '', compte: ligne?.compte?.textContent || '', moi: actuel.id === this.moiPresence, filtrer }).open()));
-              menu.addItem((i) => i.setTitle('Voir ses changements').setIcon('list-filter').onClick(filtrer));
-              if (actuel.id === this.moiPresence) menu.addItem((i) => i.setTitle('Modifier mon profil').setIcon('user-cog').onClick(() => new ProfilModal(this.app, this.plugin).open()));
+              menu.addItem((i) => i.setTitle('Voir sa fiche').setIcon('user').onClick(() => new FicheMembreModal(this.app, this.plugin, actuel, { statut: ligne?.statut?.textContent || '', compte: ligne?.compte?.textContent || '', moi: actuel.id === this.moiPresence, filtrer }).open()));
+              menu.addItem((i) => i.setTitle('Voir ses changements').setIcon('filter').onClick(filtrer));
+              if (actuel.id === this.moiPresence) menu.addItem((i) => i.setTitle('Modifier mon profil').setIcon('settings').onClick(() => new ProfilModal(this.app, this.plugin).open()));
               if (evt?.clientX !== undefined && evt.clientX + evt.clientY > 0) menu.showAtMouseEvent(evt);
               else { const r = bouton.getBoundingClientRect(); menu.showAtPosition({ x: r.left, y: r.bottom }); }
             }, { label: `Voir les changements de ${membre.nom}`, cls: 'cordee-collegue', attr: { 'data-membre-id': membre.id || '' } });
@@ -2204,7 +2219,7 @@ if (O) {
         rafraichirPresenceTableau(this);
         const selection = info.membres.find((m) => m.id === filtre);
         texteSiChange(this.titreActivite, filtre ? `Changements de ${selection?.nom || 'ce membre'}` : 'Derniers changements');
-        texteSiChange(this.information, ancien ? 'Serveur ancien : mets Cordée à jour pour filtrer tous les membres et comparer les versions.' : '40 changements maximum · Clique sur un fichier pour comparer ses versions.');
+        texteSiChange(this.information, ancien ? 'Mets le serveur Cordée à jour pour comparer les versions.' : '40 changements maximum');
         const changements = info.changements.filter((ch) => !filtre || ch.auteurId === filtre).slice(0, 40);
         const cartes = new Map(), elements = [];
         if (!changements.length) {
@@ -2221,7 +2236,7 @@ if (O) {
             texteSiChange(precedente.auteur, `${ch.auteur || 'Membre'} · ${ch.supprime ? 'a supprimé' : 'a modifié'} ${nomFichier(ch.chemin)} · ${ilYa(ch.le)}`);
             cartes.set(cle, precedente); elements.push(precedente.carte); continue;
           }
-          const carte = boutonCordee(this.zone, '', () => new RevisionModal(this.app, this.plugin, ch.rev, profils.get(ch.auteurId)).open(), { label: `Comparer ${ch.chemin}, révision ${ch.rev}`, cls: 'cordee-fichier', attr: { 'data-revision': String(ch.rev) } });
+          const carte = boutonCordee(this.zone, '', () => new RevisionModal(this.app, this.plugin, ch.rev, profils.get(ch.auteurId)).open(), { label: `Comparer ${ch.chemin}, révision ${ch.rev}`, cls: 'cordee-fichier', attr: { 'data-revision': String(ch.rev), title: ch.chemin } });
           carte.disabled = ancien || !Number.isSafeInteger(ch.rev);
           afficherAvatar(carte, ch.auteur, profils.get(ch.auteurId)?.avatar);
           const contenu = carte.createEl('span', { cls: 'cordee-fichier-contenu' });
@@ -2294,7 +2309,7 @@ if (O) {
       const c = this.contentEl; c.empty(); c.addClass?.('cordee-vue');
       if (!this.plugin.connecte()) {
         c.createEl('div', { text: 'CORDÉE', cls: 'cordee-surtitre' });
-        c.createEl('p', { text: 'Ce coffre n’est pas encore partagé. Rejoins un groupe avec une invitation, ou crée un partage.', cls: 'cordee-vide' });
+        c.createEl('p', { text: 'Rejoins une cordée ou partage ton coffre.', cls: 'cordee-vide' });
         boutonCordee(c, 'Configurer Cordée', () => new PanneauCordee(this.app, this.plugin).open(), { cls: 'cordee-bouton-principal' });
         return;
       }

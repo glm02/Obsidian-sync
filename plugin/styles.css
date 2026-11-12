@@ -316,57 +316,89 @@ textarea.cordee-geii-code:focus { outline: 1px solid var(--interactive-accent); 
 .cordee-section > summary { cursor: pointer; font-weight: var(--font-semibold); padding: var(--size-4-1) 0; }
 .cordee-section[open] > summary { margin-bottom: var(--size-4-2); }
 
-/* ---------- 0.4.9 : panneau en accordéon, icônes, lisible sur ordinateur ---------- */
-/* Texte plus grand : la barre latérale d'Obsidian réduit tout, le panneau devenait minuscule. */
-.cordee-tableau { font-size: var(--font-ui-medium); gap: var(--size-4-3); }
-.cordee-tableau .cordee-titre, .cordee-vue .cordee-tableau .cordee-titre { font-size: var(--font-ui-larger, 1.25em); margin: 0; }
-.cordee-tableau .cordee-details, .cordee-tableau .cordee-presence-resume { font-size: var(--font-ui-small); }
-.cordee-tableau .cordee-bouton { font-size: var(--font-ui-medium); min-height: 34px; }
-.cordee-tableau-entete { align-items: center; }
-.cordee-titres { flex: 1 1 200px; min-width: 0; }
+/* ---------- Panneau : mêmes repères en barre latérale et en fenêtre ---------- */
+.cordee-tableau { container-type: inline-size; min-width: 0; font-size: var(--font-ui-small); gap: var(--size-4-3); }
+.cordee-tableau, .cordee-tableau * { box-sizing: border-box; }
+.cordee-tableau-entete, .cordee-vue .cordee-tableau-entete { align-items: center; }
+.cordee-titres { flex: 1 1 180px; min-width: 0; }
+.cordee-tableau .cordee-titre, .cordee-vue .cordee-tableau .cordee-titre { margin: 0; font-size: var(--font-ui-large); line-height: 1.35; }
+.cordee-tableau .cordee-presence-resume { margin: var(--size-4-1) 0 0; color: var(--text-muted); font-size: var(--font-ui-smaller); overflow-wrap: anywhere; }
+.cordee-tableau .cordee-details { font-size: var(--font-ui-smaller); }
+.cordee-tableau p.cordee-details, .cordee-tableau .cordee-vide { margin: 0; line-height: 1.5; }
+.cordee-tableau .cordee-vide { padding-block: var(--size-4-1); }
+.cordee-vue { min-width: 0; overflow-x: hidden; }
+.cordee-tableau .cordee-commandes { gap: var(--size-4-2); max-width: 100%; }
+.cordee-tableau button.cordee-bouton:not(.clickable-icon) { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
 
-/* Boutons-icônes : carrés, l'action est dans l'infobulle. */
-.cordee-bouton.cordee-bouton-icone { display: inline-flex; align-items: center; justify-content: center; width: 34px; min-width: 34px; height: 34px; padding: 0; }
-.cordee-bouton-icone svg { width: 18px; height: 18px; }
+/* Les anciennes règles de boutons texte avaient plus de poids que le padding nul des icônes.
+ * On exclut ces boutons via clickable-icon et on réserve une taille incompressible au SVG. */
+button.cordee-bouton.cordee-bouton-icone {
+  --icon-size: 18px; --icon-stroke: 2;
+  display: inline-flex; flex: 0 0 32px; align-items: center; justify-content: center;
+  width: 32px; min-width: 32px; height: 32px; min-height: 32px; margin: 0; padding: 0;
+  color: var(--text-muted); background: transparent; box-shadow: none; border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s);
+}
+button.cordee-bouton.cordee-bouton-icone:hover { color: var(--text-normal); background: var(--background-modifier-hover); }
+button.cordee-bouton.cordee-bouton-icone svg {
+  display: block; flex: none; width: var(--icon-size); min-width: var(--icon-size); height: var(--icon-size);
+  color: inherit; fill: none; stroke: currentColor; stroke-width: var(--icon-stroke);
+}
+button.cordee-bouton.cordee-bouton-icone[hidden] { display: none; }
+.cordee-tableau button:focus-visible, .cordee-tableau summary:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
 
-/* Barre d'état : le texte prend toute la place, plus de « … » à cause des boutons. */
-.cordee-tableau-etat { grid-template-columns: minmax(0, 1fr) auto auto; }
-.cordee-statut { white-space: normal; overflow-wrap: anywhere; }
+/* Le texte de secours doit aussi tenir quand le catalogue d'icônes est indisponible. */
+.cordee-tableau-etat { display: flex; flex-wrap: wrap; align-items: center; gap: var(--size-4-2); padding: var(--size-4-2); }
+.cordee-tableau .cordee-statut { flex: 1 1 100px; min-width: 0; white-space: normal; overflow-wrap: anywhere; font-size: var(--font-ui-small); }
+.cordee-tableau .cordee-attention { overflow-wrap: anywhere; line-height: 1.5; }
 
-/* Sections repliables comme une FAQ. */
-.cordee-accordeon { border-bottom: 1px solid var(--background-modifier-border); }
-.cordee-accordeon > summary { list-style: none; cursor: pointer; border-bottom: none; margin-top: 0; padding: var(--size-4-2) 0; user-select: none; }
-.cordee-accordeon > summary::-webkit-details-marker { display: none; }
-.cordee-accordeon > summary h3 { display: flex; align-items: center; gap: var(--size-4-2); font-size: var(--font-ui-large, 1.1em); }
-.cordee-accordeon > summary h3::before { content: ""; flex: none; width: 7px; height: 7px; border-right: 2px solid var(--text-muted); border-bottom: 2px solid var(--text-muted); transform: rotate(-45deg); transition: transform .15s ease; }
-.cordee-accordeon[open] > summary h3::before { transform: rotate(45deg); }
-.cordee-accordeon > summary:hover h3 { color: var(--text-accent); }
-.cordee-section-actions { display: inline-flex; align-items: center; gap: var(--size-4-2); }
-.cordee-accordeon-corps { display: flex; flex-direction: column; gap: var(--size-4-2); padding-bottom: var(--size-4-3); }
+.cordee-tableau .cordee-accordeon { min-width: 0; border-bottom: 1px solid var(--background-modifier-border); }
+.cordee-tableau .cordee-accordeon > summary {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--size-4-2);
+  list-style: none; cursor: pointer; border: 0; margin: 0; padding: var(--size-4-2) 0; user-select: none;
+}
+.cordee-tableau .cordee-accordeon > summary::-webkit-details-marker { display: none; }
+.cordee-tableau .cordee-accordeon > summary h3 {
+  display: flex; flex: 1; align-items: center; gap: var(--size-4-2); min-width: 0;
+  margin: 0; color: var(--text-normal); font-size: var(--font-ui-small); font-weight: var(--font-semibold); overflow-wrap: anywhere;
+}
+.cordee-tableau .cordee-accordeon > summary h3::before { content: ""; flex: none; width: 6px; height: 6px; margin-inline: 2px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: rotate(-45deg); }
+.cordee-tableau .cordee-accordeon[open] > summary h3::before { transform: rotate(45deg); }
+.cordee-tableau .cordee-accordeon > summary:hover h3 { color: var(--text-accent); }
+.cordee-section-actions { display: inline-flex; flex: none; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: var(--size-4-2); max-width: 55%; }
+.cordee-tableau .cordee-accordeon-corps { display: flex; flex-direction: column; gap: var(--size-4-2); min-width: 0; padding-bottom: var(--size-4-3); }
 
-/* Membres : grille régulière au lieu de pastilles de tailles inégales. */
-.cordee-collegues { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
-.cordee-collegue { width: 100%; min-width: 0; border-radius: var(--radius-l); }
-.cordee-collegue > * { min-width: 0; }
+.cordee-tableau .cordee-collegues { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 124px), 1fr)); gap: var(--size-4-2); }
+.cordee-tableau button.cordee-collegue:not(.clickable-icon) { width: 100%; min-width: 0; min-height: 44px; padding: 6px 8px; border-radius: var(--radius-m); }
+.cordee-tableau button.cordee-collegue-tous:not(.clickable-icon) { justify-content: center; align-items: center; }
+.cordee-tableau .cordee-collegue > * { min-width: 0; }
+.cordee-tableau .cordee-collegue .cordee-avatar { flex: 0 0 28px; }
+.cordee-tableau .cordee-collegue-identite { flex: 1; }
+.cordee-tableau .cordee-collegue-identite > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Aujourd'hui : colonne horaire plus étroite, le titre a la place. */
-.cordee-evenement-heure { min-width: 0; width: 5.5em; }
-
-/* Barre d'état d'Obsidian : espace avant « en ligne ». */
-.cordee-presence-barre { margin-inline-start: var(--size-4-1); }
-
-/* ---------- 0.4.10 : barre latérale plus compacte ---------- */
-.cordee-vue .cordee-tableau { font-size: var(--font-ui-small); gap: var(--size-4-2); }
-.cordee-vue .cordee-tableau .cordee-titre { font-size: var(--font-ui-medium); }
-.cordee-vue .cordee-tableau .cordee-details, .cordee-vue .cordee-tableau .cordee-presence-resume { font-size: var(--font-ui-smaller); }
-.cordee-vue .cordee-tableau .cordee-bouton { font-size: var(--font-ui-small); min-height: 28px; }
-.cordee-vue .cordee-bouton.cordee-bouton-icone { width: 28px; min-width: 28px; height: 28px; }
-.cordee-vue .cordee-bouton-icone svg { width: 15px; height: 15px; }
-.cordee-vue .cordee-accordeon > summary { padding: var(--size-4-1) 0; }
-.cordee-vue .cordee-accordeon > summary h3 { font-size: var(--font-ui-small); text-transform: uppercase; letter-spacing: .04em; color: var(--text-muted); }
-.cordee-vue .cordee-tableau-etat { padding: var(--size-4-1) var(--size-4-2); }
-.cordee-vue .cordee-collegues { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
+/* min-width: 0 à chaque niveau permet l'ellipsis même avec des chemins sans espaces. */
+.cordee-tableau .cordee-a-voir, .cordee-tableau .cordee-a-voir-ligne, .cordee-tableau .cordee-fichiers { min-width: 0; }
+.cordee-tableau .cordee-a-voir-ligne { gap: var(--size-4-2); padding: 6px 8px 6px 12px; }
+.cordee-tableau .cordee-fichier-tete { width: 100%; min-width: 0; }
+.cordee-tableau .cordee-fichier-chemin { display: block; flex: 1 1 auto; min-width: 0; }
+.cordee-tableau .cordee-fichier-dossier { flex: 0 1 35%; min-width: 0; }
+.cordee-tableau .cordee-a-voir-ouvrir > .cordee-details { display: block; width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cordee-tableau .cordee-fichier-auteur { max-width: 100%; }
+.cordee-tableau .cordee-type-changement { flex: none; }
+.cordee-tableau .cordee-fichiers > .cordee-vide { padding: var(--size-4-2) var(--size-4-3); }
+.cordee-tableau .cordee-evenement-ligne .cordee-evenement-heure { flex: 0 0 5.5em; min-width: 0; width: auto; white-space: normal; overflow-wrap: anywhere; }
+.cordee-tableau .cordee-evenement-texte { flex: 1; }
+.cordee-tableau .cordee-evenement-texte > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cordee-evenement-bientot { color: var(--text-accent); font-size: var(--font-ui-smaller); font-weight: var(--font-medium); }
+
+/* La largeur du panneau compte, pas celle de la fenêtre Obsidian qui l'héberge. */
+@container (max-width: 380px) {
+  .cordee-tableau button.cordee-fichier:not(.clickable-icon) { grid-template-columns: 24px minmax(0, 1fr); gap: var(--size-4-2); padding: 8px; }
+  .cordee-tableau .cordee-type-changement, .cordee-tableau .cordee-fichier-dossier { display: none; }
+}
+/* Garder la colonne horaire existante dans les autres vues. */
+.cordee-evenement-heure { min-width: 0; width: 5.5em; }
+.cordee-barre { max-width: 100%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.cordee-presence-barre { margin-inline-start: var(--size-4-1); }
 
 /* ---------- 0.4.12 ---------- */
 /* Activité : les lignes ne se tassent plus les unes sur les autres dans la liste à défilement. */
