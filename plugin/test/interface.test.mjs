@@ -570,7 +570,8 @@ test('changer de note met la présence à jour sans recharger l’activité', as
   const { plugin, rendu } = charger({ ...ETAT_TEST }); await plugin.onload();
   plugin.presence = [{ id: 'm1', nom: 'Membre test', chemin: 'avant.md' }];
   let appels = 0;
-  plugin.moteur.api = async () => { appels++; return { json: async () => ({ ...INFO_TEST, changements: [] }) }; };
+  // La jauge de stockage a sa propre lecture : seules les lectures d'activité comptent ici.
+  plugin.moteur.api = async (methode, chemin) => { if (!String(chemin).endsWith('/stockage')) appels++; return { json: async () => ({ ...INFO_TEST, changements: [] }) }; };
   await plugin.ruban.callback();
   const t = rendu.modal.tableau, membres = [...t.membresEl.children];
   plugin.presence = [{ id: 'm1', nom: 'Membre test', chemin: 'apres.md' }];

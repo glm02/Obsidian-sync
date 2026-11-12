@@ -409,3 +409,13 @@ button.cordee-bouton.cordee-bouton-icone[hidden] { display: none; }
 .cordee-fiche-tete .cordee-avatar { width: 56px; height: 56px; flex-basis: 56px; font-size: 1.3em; }
 .cordee-fiche-tete p { margin: 2px 0 0; }
 .cordee-fiche-modal .cordee-commandes { margin-top: var(--size-4-3); }
+
+/* Jauge de stockage du serveur. */
+.cordee-stockage { display: flex; flex-direction: column; gap: 4px; }
+.cordee-stockage[hidden] { display: none; }
+.cordee-stockage-texte { color: var(--text-muted); font-size: var(--font-ui-smaller); font-variant-numeric: tabular-nums; }
+.cordee-stockage-barre { height: 6px; border-radius: 999px; background: var(--background-modifier-border); overflow: hidden; }
+.cordee-stockage-rempli { width: 0; height: 100%; border-radius: inherit; background: var(--color-green); transition: width .4s ease; }
+.cordee-stockage[data-niveau="haut"] .cordee-stockage-rempli { background: var(--color-orange); }
+.cordee-stockage[data-niveau="plein"] .cordee-stockage-rempli { background: var(--color-red); }
+.cordee-stockage[data-niveau="plein"] .cordee-stockage-texte { color: var(--text-error); }

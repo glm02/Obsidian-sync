@@ -483,7 +483,7 @@ async function enParallele(elements, limite, travail) {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.13';
+const VERSION = '0.4.14';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -1214,6 +1214,21 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
    * Avant la 0.1.5, l'extension ne sait ni créer ni supprimer de dossiers : un ami qui l'a gardée voit les fichiers
    * disparaître mais pas le dossier vide. On le dit une fois, avec les noms, plutôt que de laisser croire à un bug.
    */
+  /** Place du serveur (gardée 1 min) ; null si le serveur est trop ancien pour la donner. */
+  async lireStockage() {
+    if (this.stockage && Date.now() - this.stockage.le < 60_000) return this.stockage;
+    // Une seule lecture à la fois, même si le panneau la demande plusieurs fois de suite.
+    this.lectureStockage ||= (async () => {
+      try {
+        const r = await this.moteur.api('GET', `/api/coffres/${this.etat.coffreId}/stockage`);
+        this.stockage = { ...(await r.json()), le: Date.now() };
+      } catch { this.stockage = null; }
+      finally { this.lectureStockage = null; }
+      return this.stockage;
+    })();
+    return this.lectureStockage;
+  }
+
   async verifierVersions() {
     if (!this.connecte() || this.arret) return;
     const t = Date.now();
@@ -1473,6 +1488,13 @@ function afficherBarrePresence(barre, texte, noms) {
     barre.createEl('span', { text: ' · ' });
     barre.createEl('span', { text: suite, cls: 'cordee-presence-barre' });
   }
+}
+
+function octetsLisibles(n) {
+  const unites = ['o', 'Ko', 'Mo', 'Go', 'To'];
+  let i = 0, v = Math.max(0, Number(n) || 0);
+  while (v >= 1024 && i < unites.length - 1) { v /= 1024; i++; }
+  return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1).replace('.', ',')} ${unites[i]}`;
 }
 
 function texteSiChange(el, texte) { if (el.textContent !== texte) el.setText(texte); }
@@ -2067,6 +2089,21 @@ if (O) {
       const statut = etat.createEl('span', { cls: 'cordee-statut', attr: { role: 'status' } });
       const pause = boutonCordee(etat, '', () => plugin.mettreEnPause(!plugin.etat.enPause), { label: 'Pause ou reprise', cls: 'cordee-bouton-discret' });
       boutonCordee(etat, 'Synchroniser', () => plugin.lancer({ forcer: true }), { icone: 'refresh-cw', cls: 'cordee-bouton-discret' });
+      // Jauge du disque du serveur : on voit d'un coup d'œil s'il se remplit.
+      const jauge = tableau.createEl('div', { cls: 'cordee-stockage' });
+      jauge.hidden = true;
+      const jaugeTexte = jauge.createEl('div', { cls: 'cordee-stockage-texte' });
+      const jaugeBarre = jauge.createEl('div', { cls: 'cordee-stockage-barre' }).createEl('div', { cls: 'cordee-stockage-rempli' });
+      this.afficherStockage = async () => {
+        const st = await plugin.lireStockage?.();
+        if (this.detruit || !st || !(st.total > 0)) { jauge.hidden = true; return; }
+        const pris = st.total - st.libre, part = Math.min(100, Math.round((pris / st.total) * 100));
+        jauge.hidden = false;
+        jaugeBarre.style?.setProperty?.('width', part + '%');
+        jauge.setAttribute('data-niveau', part >= 90 ? 'plein' : part >= 75 ? 'haut' : 'ok');
+        texteSiChange(jaugeTexte, `Serveur ${part} % plein · ${octetsLisibles(st.libre)} libres · ce coffre ${octetsLisibles(st.coffre)}`);
+      };
+      this.afficherStockage();
       const attention = tableau.createEl('p', { cls: 'cordee-attention', attr: { role: 'status' } });
       const jour = accordeon(tableau, 'jour', 'Aujourd’hui');
       boutonCordee(jour.actions, 'La semaine', () => plugin.ouvrirSemaine(), { icone: 'calendar', cls: 'cordee-bouton-discret' });
@@ -2160,6 +2197,7 @@ if (O) {
       if (entrees.length > 30) zone.createEl('p', { text: `Et ${entrees.length - 30} autre(s).`, cls: 'cordee-details' });
     }
     async charger() {
+      this.afficherStockage?.(); // la jauge suit les envois (lecture gardée 1 min)
       if (!this.actif()) return;
       this.revChargee = this.plugin.etat.derniereRev; this.presenceChargee = this.signaturePresence();
       const tour = this.tour = (this.tour || 0) + 1;

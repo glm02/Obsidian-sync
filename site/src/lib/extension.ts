@@ -3,7 +3,7 @@
  * Source : le code de plugin/main.js et CHANGELOG.md. À mettre à jour à chaque version
  * (la version doit suivre manifest.json, sinon le site annonce une version qui n'existe pas).
  */
-export const VERSION_EXTENSION = "0.4.13";
+export const VERSION_EXTENSION = "0.4.14";
 
 export type Fonction = { titre: string; texte: string };
 export type Groupe = { id: string; titre: string; resume: string; fonctions: Fonction[] };
@@ -106,9 +106,10 @@ export type Version = { version: string; titre: string; points: string[] };
 
 export const versions: Version[] = [
   {
-    version: "0.4.13",
+    version: "0.4.14",
     titre: "Plus rapide, plus clair, plus fiable",
     points: [
+      "Jauge de stockage du serveur dans le panneau : verte, orange puis rouge quand le disque se remplit.",
       "Les vidéos (mp4, mov…) restent sur l’appareil par défaut, les petits fichiers partent d’abord et la progression s’affiche (envoi 12/320).",
       "Synchronisation beaucoup plus rapide : les fichiers partent et arrivent 4 par 4, et l’arrivée dans un gros coffre ne ralentit plus.",
       "Fini le blocage sur « synchronisation… » : une requête sans réponse est abandonnée et la synchro repart toute seule. Progression visible (12/240).",

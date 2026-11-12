@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.14
+
+- **Jauge de stockage** dans le panneau : remplissage du disque du serveur, place libre et poids du coffre. Verte, orange à 75 %, rouge à 90 %. Demande le serveur à jour (route `/stockage`).
+- **Icônes rétablies** : Obsidian imposait une marge intérieure qui écrasait les icônes à 4 px. Si une icône manque, le bouton reprend son texte.
+- Panneau épuré : accordéons plus sobres, chemins longs tronqués avec infobulle, espacements harmonisés.
+
 ## 0.4.13
 
 - **Vidéos non partagées par défaut** : les vidéos (mp4, mov, mkv…) restent sur l’appareil. Un réglage « Partager les vidéos » les réactive. Cause du blocage : 29 vidéos de cours Moodle (743 Mo) monopolisaient la synchro.
