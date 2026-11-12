@@ -1,5 +1,10 @@
 # Nouveautés
 
+## 0.4.17
+
+- **Excalidraw** : pendant qu’on dessine, les enregistrements sont regroupés (envoi après 1,5 s de calme, au plus 5 s d’attente). Les notes partent toujours en 200 ms.
+- Un dessin modifié des deux côtés n’est plus fusionné ligne à ligne, ce qui pouvait le casser : la version de l’ami est gardée et la tienne est copiée à côté.
+
 ## 0.4.16
 
 - **Clic droit sur un dossier** : « Ne pas partager ce dossier » ou « Partager à nouveau ce dossier ».

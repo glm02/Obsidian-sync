@@ -1,7 +1,7 @@
 {
   "id": "cordee",
   "name": "Cordee",
-  "version": "0.4.16",
+  "version": "0.4.17",
   "minAppVersion": "1.4.0",
   "description": "Share a vault with friends on your own server, with automatic sync and conflict-aware note merging.",
   "author": "Les contributeurs de Cordée",
