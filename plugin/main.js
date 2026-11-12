@@ -238,8 +238,10 @@ class Moteur {
   synchroniser() {
     if (this.enCours) { this.encore = true; return this.enCours; }
     this.enCours = (async () => {
+      let tours = 0;
       try {
         do {
+          if (++tours > 5) { this.signaler('encore'); break; }
           this.encore = false;
           this.signaler('synchro');
           await this.recuperer();
@@ -271,10 +273,11 @@ class Moteur {
         for (let i = 0; i < lot.length; i++) {
           for (let j = i; j < Math.min(lot.length, i + PARALLELE); j++) this.precharger(lot[j][1]);
           const [cle, c] = lot[i];
+          if (lot.length > 10) this.signaler('progression', i + 1, lot.length);
           traites.add(cle);
           if (!this.ignorer(c.chemin)) await this.appliquerSansBloquer(c);
         }
-      } finally { this.indexListe = null; this.prechargements = null; }
+      } finally { this.indexListe = null; this.prechargements = null; this.signaler('progression', 0, 0); }
       if (r.changements.length) this.etat.derniereRev = r.changements[r.changements.length - 1].rev;
       plus = r.plus;
       await this.sauver();
@@ -467,7 +470,7 @@ async function enParallele(elements, limite, travail) {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.10';
+const VERSION = '0.4.11';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -559,9 +562,16 @@ function afficherAvatar(c, nom, avatar) {
 const ICONE_CORDEE = '<g transform="scale(0.390625)"><path fill="currentColor" stroke="none" fill-rule="evenodd" d="M188.29 36.97 A104 104 0 1 0 188.29 219.03 A32 32 0 1 0 166.82 189.59 A68 68 0 1 1 166.82 66.41 A32 32 0 1 0 188.29 36.97 Z M212.81 67.19 A14 14 0 1 0 184.81 67.19 A14 14 0 1 0 212.81 67.19 Z M212.81 188.81 A14 14 0 1 0 184.81 188.81 A14 14 0 1 0 212.81 188.81 Z"/></g>';
 
 function httpObsidian({ methode, url, entetes, corps, type }) {
-  return O.requestUrl({ url, method: methode, headers: entetes, body: corps, contentType: type, throw: false }).then((r) => ({
+  const requete = O.requestUrl({ url, method: methode, headers: entetes, body: corps, contentType: type, throw: false }).then((r) => ({
     statut: r.status, json: async () => r.json, octets: async () => r.arrayBuffer,
   }));
+  if (typeof setTimeout !== 'function') return requete;
+  // 45 s, plus 1 s par 50 Ko envoyés : large pour un gros PDF, mais jamais infini
+  // (sans limite, une requête perdue laissait « synchronisation… » affiché pour toujours).
+  const delai = 45_000 + Math.ceil((corps?.byteLength || corps?.length || 0) / 50_000) * 1000;
+  let minuteur;
+  const limite = new Promise((_, refuser) => { minuteur = setTimeout(() => refuser(Object.assign(new Error('Le serveur ne répond pas. Nouvel essai bientôt.'), { reseau: true })), delai); });
+  return Promise.race([requete, limite]).finally(() => clearTimeout(minuteur));
 }
 
 /** Notifications uniquement : les contenus continuent de passer par requestUrl. */
@@ -1130,7 +1140,9 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
       signaler: (quoi, a, b) => {
         if (quoi === 'synchro') { this.phase = 'synchro'; this.derniereErreur = ''; this.sourceErreur = ''; this.fichiersTropGros.clear(); this.fichiersBloques.clear(); this.dossiersEnAttente.clear(); this.suppressionsBloquees = 0; }
         else if (quoi === 'ok') this.phase = 'ok';
-        else if (quoi === 'erreur') this.signalerErreur(a, 'synchro');
+        else if (quoi === 'encore') { this.phase = 'ok'; this.programmer(2000); }
+        else if (quoi === 'progression') { this.progression = b ? `${a}/${b}` : ''; }
+        else if (quoi === 'erreur') { this.signalerErreur(a, 'synchro'); if (a?.reseau || a?.statut >= 500) this.programmer(15_000); } // réseau coupé : nouvel essai seul dans 15 s
         else if (quoi === 'conflit') new O.Notice(`Cordée : ${a} modifié aussi par ${b || 'un ami'}. Les deux versions sont gardées, vérifie la note.`, 10000);
         else if (quoi === 'garde-fou') this.annoncerGardeFou(a, b);
         else if (quoi === 'dossiers-indisponibles') new O.Notice('Cordée : serveur à mettre à jour pour les dossiers vides. Les notes se synchronisent.', 10000);
@@ -1156,7 +1168,7 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
 
   titreStatut() {
     if (!this.connecte()) return 'non connecté';
-    if (this.phase === 'synchro') return this.etat.enPause ? 'fin de la synchronisation en cours…' : 'synchronisation…';
+    if (this.phase === 'synchro') return this.etat.enPause ? 'fin de la synchronisation en cours…' : `synchronisation…${this.progression ? ' ' + this.progression : ''}`;
     if (this.etat.enPause) return 'en pause';
     if (this.derniereErreur) return 'connexion à vérifier';
     if (this.fichiersTropGros.size || this.fichiersBloques.size || this.suppressionsBloquees || this.dossiersEnAttente.size) return 'fichiers à vérifier';

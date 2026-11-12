@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.11
+
+- **Fini le blocage sur « synchronisation… »** : une requête sans réponse est abandonnée après 45 s (plus pour un gros fichier) au lieu d’attendre pour toujours. Une coupure réseau relance la synchro toute seule 15 s plus tard.
+- Une synchro ne peut plus tourner en boucle : au-delà de 5 tours d’affilée, la suite est reprogrammée.
+- **Progression visible** pendant une grosse réception : « synchronisation… 12/240 ».
+
 ## 0.4.10
 
 - **Barre latérale plus compacte** : texte et icônes plus petits, titres de section discrets.
