@@ -189,7 +189,8 @@ class Moteur {
   }
 
   async hashLocal(chemin) {
-    const f = this.fichiers.lister().find((x) => x.chemin === chemin);
+    if (!this.indexListe) this.indexListe = new Map(this.fichiers.lister().map((x) => [x.chemin, x]));
+    const f = this.indexListe.get(chemin);
     if (!f) return null;
     return this.hashFichier(f);
   }
@@ -205,8 +206,20 @@ class Moteur {
   }
 
   async telecharger(hash) {
+    const pret = this.prechargements?.get(hash);
+    if (pret) { this.prechargements.delete(hash); return pret; }
     const r = await this.api('GET', `${this.racine()}/blobs/${hash}`);
     return r.octets();
+  }
+
+  /** Lance à l'avance le téléchargement d'une version reçue, au plus PARALLELE à la fois. */
+  precharger(c) {
+    if (!c || c.type === 'dossier' || c.supprime || !c.hash || c.hash === this.etat.bases[c.chemin] || this.ignorer(c.chemin)) return;
+    this.prechargements ||= new Map();
+    if (this.prechargements.has(c.hash)) return;
+    const promesse = this.api('GET', `${this.racine()}/blobs/${c.hash}`).then((r) => r.octets());
+    promesse.catch(() => { /* l'erreur ressort au moment d'appliquer ce changement */ });
+    this.prechargements.set(c.hash, promesse);
   }
 
   async envoyerBlob(hash, buf) {
@@ -252,20 +265,28 @@ class Moteur {
       const r = await (await this.api('GET', `${this.racine()}/changements?depuis=${this.etat.derniereRev}`)).json();
       const derniers = new Map();
       for (const c of r.changements) derniers.set(`${c.type || 'fichier'}:${c.chemin}`, c);
-      for (const [cle, c] of [...derniers.entries()].sort((a, b) => a[1].rev - b[1].rev)) {
-        traites.add(cle);
-        if (!this.ignorer(c.chemin)) await this.appliquerSansBloquer(c);
-      }
+      const lot = [...derniers.entries()].sort((a, b) => a[1].rev - b[1].rev);
+      this.indexListe = null;
+      try {
+        for (let i = 0; i < lot.length; i++) {
+          for (let j = i; j < Math.min(lot.length, i + PARALLELE); j++) this.precharger(lot[j][1]);
+          const [cle, c] = lot[i];
+          traites.add(cle);
+          if (!this.ignorer(c.chemin)) await this.appliquerSansBloquer(c);
+        }
+      } finally { this.indexListe = null; this.prechargements = null; }
       if (r.changements.length) this.etat.derniereRev = r.changements[r.changements.length - 1].rev;
       plus = r.plus;
       await this.sauver();
     }
     // Les changements mis de côté lors d'une synchro précédente : une nouvelle chance, sans bloquer le reste.
-    for (const [cle, c] of Object.entries(this.etat.enAttente)) {
-      if (traites.has(cle)) continue;
-      if (this.ignorer(c.chemin)) { delete this.etat.enAttente[cle]; continue; }
-      await this.appliquerSansBloquer(c);
-    }
+    try {
+      for (const [cle, c] of Object.entries(this.etat.enAttente)) {
+        if (traites.has(cle)) continue;
+        if (this.ignorer(c.chemin)) { delete this.etat.enAttente[cle]; continue; }
+        await this.appliquerSansBloquer(c);
+      }
+    } finally { this.indexListe = null; }
     await this.sauver();
   }
 
@@ -361,22 +382,25 @@ class Moteur {
   /** Envoie les changements locaux. Renvoie le nombre d'écritures refusées car périmées. */
   async envoyer() {
     let refus = await this.envoyerDossiers(false);
-    const presents = new Set();
+    const presents = new Set(), aEnvoyer = [];
     for (const f of this.fichiers.lister()) {
       if (this.ignorer(f.chemin)) continue;
       presents.add(f.chemin);
       if (f.taille > this.tailleMax) { this.signaler('fichier-trop-gros', f.chemin); continue; }
+      aEnvoyer.push(f);
+    }
+    await enParallele(aEnvoyer, PARALLELE, async (f) => {
       let h = await this.hashFichier(f);
       const base = this.etat.bases[f.chemin] || null;
-      if (h === null || h === base) continue;
+      if (h === null || h === base) return;
       const contenu = await this.fichiers.lire(f.chemin);
-      if (!contenu) continue; // supprimé pendant la lecture
+      if (!contenu) return; // supprimé pendant la lecture
       h = await empreinte(contenu); // le fichier peut changer entre le premier hachage et l'envoi
-      if (h === base) continue;
+      if (h === base) return;
       await this.envoyerBlob(h, contenu);
-      if ((await this.valider(f.chemin, h, base)) === 409) { refus++; continue; }
+      if ((await this.valider(f.chemin, h, base)) === 409) { refus++; return; }
       this.etat.bases[f.chemin] = h;
-    }
+    });
     const disparus = Object.keys(this.etat.bases).filter((p) => !presents.has(p) && !this.ignorer(p));
     const total = Object.keys(this.etat.bases).length;
     // Garde-fou : si la moitié du coffre disparaît d'un coup, c'est plus probablement un accident qu'un choix.
@@ -424,10 +448,26 @@ class Moteur {
   }
 }
 
+// Nombre d'envois ou de téléchargements simultanés : assez pour remplir la connexion, sans saturer le serveur.
+const PARALLELE = 4;
+
+/** Traite les éléments à `limite` à la fois ; la première erreur arrête les nouveaux départs puis remonte. */
+async function enParallele(elements, limite, travail) {
+  let i = 0, erreur = null;
+  const ouvrier = async () => {
+    while (!erreur && i < elements.length) {
+      const e = elements[i++];
+      try { await travail(e); } catch (err) { erreur ||= err; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limite, elements.length) }, ouvrier));
+  if (erreur) throw erreur;
+}
+
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.6';
+const VERSION = '0.4.8';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -1264,6 +1304,8 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
     this.registerInterval(window.setInterval(async () => {
       this.maintenirFlux();
       if (this.arret || !this.connecte() || this.etat.enPause || this.ecouteEnCours) return;
+      if (this.fluxRevisions?.connecte && Date.now() - (this.dernierSondage || 0) < 15_000) return;
+      this.dernierSondage = Date.now();
       this.ecouteEnCours = true;
       const acces = [this.etat.serveur, this.etat.coffreId, this.etat.jeton];
       const courant = () => !this.arret && this.connecte() && !this.etat.enPause && acces.every((v, i) => v === [this.etat.serveur, this.etat.coffreId, this.etat.jeton][i]);

@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.8
+
+- **Synchronisation beaucoup plus rapide** : les fichiers partent et arrivent 4 par 4 au lieu d’un par un. Les prochains fichiers reçus se téléchargent pendant l’écriture du fichier courant.
+- À l’arrivée dans un gros coffre, la liste des fichiers n’est plus relue pour chaque changement reçu : l’arrivée devient quasi linéaire au lieu de ralentir avec la taille du coffre.
+- Quand le flux en direct fonctionne, le serveur n’est plus interrogé toutes les 2,5 s mais toutes les 15 s (présence) : moins de batterie et de réseau, surtout sur téléphone.
+
 ## 0.4.7
 
 - **Réglages épurés** : le coffre partagé passe en premier ; Calendriers et Moodle deviennent des sections repliables. Inviter, Synchroniser, Activité et Mon profil tiennent sur une seule ligne. Les descriptions sont raccourcies et la connexion Moodle par le navigateur est mise en avant.
