@@ -1,5 +1,11 @@
 # Nouveautés
 
+## 0.4.13
+
+- **Vidéos non partagées par défaut** : les vidéos (mp4, mov, mkv…) restent sur l’appareil. Un réglage « Partager les vidéos » les réactive. Cause du blocage : 29 vidéos de cours Moodle (743 Mo) monopolisaient la synchro.
+- **Petits fichiers d’abord** : les notes et petits fichiers partent avant les gros, et le statut affiche « synchronisation… envoi 12/320 ».
+- L’état est sauvegardé tous les 20 fichiers envoyés : fermer Obsidian pendant un gros envoi ne fait rien repartir de zéro.
+
 ## 0.4.12
 
 - **Activité réparée** : les lignes de « Derniers changements » ne se chevauchent plus.

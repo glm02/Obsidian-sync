@@ -25,6 +25,9 @@ async function empreinte(buf) {
 }
 
 const EXT_TEXTE = new Set(['md', 'txt', 'csv']);
+// Les vidéos de cours pèsent des centaines de Mo : elles restent sur l'appareil sauf choix contraire.
+const EXT_VIDEO = new Set(['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v', 'wmv']);
+function estVideo(chemin) { return EXT_VIDEO.has(String(chemin).split('.').pop().toLowerCase()); }
 const estTexte = (chemin) => EXT_TEXTE.has((chemin.split('.').pop() || '').toLowerCase());
 
 // Pour chaque ligne de x, indice de la ligne correspondante dans y (plus longue sous-suite commune), ou -1.
@@ -392,18 +395,28 @@ class Moteur {
       if (f.taille > this.tailleMax) { this.signaler('fichier-trop-gros', f.chemin); continue; }
       aEnvoyer.push(f);
     }
+    const changes = [];
     await enParallele(aEnvoyer, PARALLELE, async (f) => {
-      let h = await this.hashFichier(f);
+      const h = await this.hashFichier(f);
+      if (h !== null && h !== (this.etat.bases[f.chemin] || null)) changes.push(f);
+    });
+    // Les notes et petits fichiers partent d'abord : un gros PDF ne retarde plus tout le reste.
+    changes.sort((a, b) => a.taille - b.taille);
+    let faits = 0;
+    await enParallele(changes, PARALLELE, async (f) => {
+      if (changes.length > 3) this.signaler('progression', ++faits, changes.length, 'envoi');
       const base = this.etat.bases[f.chemin] || null;
-      if (h === null || h === base) return;
       const contenu = await this.fichiers.lire(f.chemin);
       if (!contenu) return; // supprimé pendant la lecture
-      h = await empreinte(contenu); // le fichier peut changer entre le premier hachage et l'envoi
+      const h = await empreinte(contenu); // le fichier peut changer entre le premier hachage et l'envoi
       if (h === base) return;
       await this.envoyerBlob(h, contenu);
       if ((await this.valider(f.chemin, h, base)) === 409) { refus++; return; }
       this.etat.bases[f.chemin] = h;
+      // Sauvegarde régulière : fermer Obsidian au milieu d'un gros envoi ne fait rien repartir de zéro.
+      if (faits % 20 === 0) await this.sauver();
     });
+    this.signaler('progression', 0, 0);
     const disparus = Object.keys(this.etat.bases).filter((p) => !presents.has(p) && !this.ignorer(p));
     const total = Object.keys(this.etat.bases).length;
     // Garde-fou : si la moitié du coffre disparaît d'un coup, c'est plus probablement un accident qu'un choix.
@@ -470,7 +483,7 @@ async function enParallele(elements, limite, travail) {
 /* ---------- Intégration Obsidian ---------- */
 
 // Doit rester égale à la version de manifest.json (un test le vérifie).
-const VERSION = '0.4.12';
+const VERSION = '0.4.13';
 // Première version qui sait créer et supprimer des dossiers : en dessous, un ami voit les fichiers partir mais pas les dossiers.
 const VERSION_DOSSIERS = '0.1.5';
 
@@ -1136,12 +1149,12 @@ class CordeePlugin extends (O ? O.Plugin : Object) {
       sauver: () => this.saveData(this.etat),
       fichiers: fichiersObsidian(this.app),
       http: httpObsidian,
-      ignorer: (p) => dansConfiguration(p, this.app.vault.configDir) || this.etat.dossiersIgnores.split(',').map((s) => s.trim()).filter(Boolean).some((d) => dansDossier(p, d)),
-      signaler: (quoi, a, b) => {
+      ignorer: (p) => dansConfiguration(p, this.app.vault.configDir) || (!this.etat.partagerVideos && estVideo(p)) || this.etat.dossiersIgnores.split(',').map((s) => s.trim()).filter(Boolean).some((d) => dansDossier(p, d)),
+      signaler: (quoi, a, b, c) => {
         if (quoi === 'synchro') { this.phase = 'synchro'; this.derniereErreur = ''; this.sourceErreur = ''; this.fichiersTropGros.clear(); this.fichiersBloques.clear(); this.dossiersEnAttente.clear(); this.suppressionsBloquees = 0; }
         else if (quoi === 'ok') this.phase = 'ok';
         else if (quoi === 'encore') { this.phase = 'ok'; this.programmer(2000); }
-        else if (quoi === 'progression') { this.progression = b ? `${a}/${b}` : ''; }
+        else if (quoi === 'progression') { this.progression = b ? `${c === 'envoi' ? 'envoi' : 'réception'} ${a}/${b}` : ''; }
         else if (quoi === 'erreur') { this.signalerErreur(a, 'synchro'); if (a?.reseau || a?.statut >= 500) this.programmer(15_000); } // réseau coupé : nouvel essai seul dans 15 s
         else if (quoi === 'conflit') new O.Notice(`Cordée : ${a} modifié aussi par ${b || 'un ami'}. Les deux versions sont gardées, vérifie la note.`, 10000);
         else if (quoi === 'garde-fou') this.annoncerGardeFou(a, b);
@@ -2545,6 +2558,7 @@ if (O) {
           .addButton((b) => b.setButtonText('Synchroniser').onClick(() => p.lancer({ forcer: true })))
           .addButton((b) => b.setButtonText('Activité').onClick(() => new ActiviteModal(this.app, p).open()))
           .addButton((b) => b.setButtonText('Mon profil').onClick(() => new ProfilModal(this.app, p).open()));
+        new O.Setting(c).setName('Partager les vidéos').setDesc('Désactivé : les vidéos (mp4, mov…) restent sur cet appareil.').addToggle((t) => t.setValue(!!e.partagerVideos).onChange(async (v) => { e.partagerVideos = v; await p.saveData(e); p.programmer(0); }));
         new O.Setting(c).setName('Dossiers non partagés').setDesc('Séparés par des virgules : Brouillons, Perso').addText((t) => t.setValue(e.dossiersIgnores).onChange(async (v) => { e.dossiersIgnores = v; await p.saveData(e); }));
         // Calendriers et Moodle sont repliés : on ne les règle qu'une fois.
         this.afficherCalendriers(sectionRepliable(c, 'Calendriers', 'calendriers', this), rafraichir);

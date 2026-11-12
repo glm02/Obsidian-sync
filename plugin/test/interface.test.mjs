@@ -68,6 +68,10 @@ function charger(etat, navigateur = {}) {
         const champ = { inputEl: {}, setValue(v) { this.value = v; this.inputEl.value = v; return this; }, setPlaceholder() { return this; }, onChange(action) { this.change = action; return this; } };
         callback(champ); rendu.champs.push({ nom: this.nom, champ }); return this;
       }
+      addToggle(callback) {
+        const champ = { setValue(v) { this.value = v; return this; }, onChange(action) { this.change = action; return this; } };
+        callback(champ); rendu.champs.push({ nom: this.nom, champ }); return this;
+      }
       addButton(callback) {
         let label, action;
         const bouton = { setButtonText(text) { if (label) rendu.boutons.delete(label); label = text; if (action) rendu.boutons.set(label, () => !this.disabled && action()); return this; }, setDisabled(disabled) { this.disabled = disabled; return this; }, setCta() { return this; }, setWarning() { return this; }, onClick(callback) { action = callback; if (label) rendu.boutons.set(label, () => !this.disabled && action()); return this; } };
@@ -1796,4 +1800,12 @@ test('devoirs Moodle dans la semaine : état rendu ou à rendre, sans doublon av
   assert.equal(evts.length, 1, 'le devoir n’apparaît qu’une fois');
   assert.equal(evts[0].rendu, true);
   assert.equal(evts[0].source, 'Moodle · ENER3');
+});
+
+test('les vidéos restent sur l’appareil sauf si « Partager les vidéos » est activé', async () => {
+  const { plugin } = charger(ETAT_TEST); await plugin.onload();
+  assert.equal(plugin.moteur.ignorer('Cours/Séance 1.MP4'), true);
+  assert.equal(plugin.moteur.ignorer('Cours/TD.pdf'), false);
+  plugin.etat.partagerVideos = true;
+  assert.equal(plugin.moteur.ignorer('Cours/Séance 1.MP4'), false);
 });
