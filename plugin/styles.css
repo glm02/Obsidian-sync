@@ -419,3 +419,95 @@ button.cordee-bouton.cordee-bouton-icone[hidden] { display: none; }
 .cordee-stockage[data-niveau="haut"] .cordee-stockage-rempli { background: var(--color-orange); }
 .cordee-stockage[data-niveau="plein"] .cordee-stockage-rempli { background: var(--color-red); }
 .cordee-stockage[data-niveau="plein"] .cordee-stockage-texte { color: var(--text-error); }
+
+/* Pages secondaires : leur cadre reste indépendant du panneau d’activité. */
+.modal.cordee-page-modal { width: min(620px, 94vw); max-width: 94vw; }
+.modal.cordee-page-modal.cordee-moodle-modal { width: min(960px, 94vw); }
+.cordee-page, .cordee-reglages { container-type: inline-size; min-width: 0; color: var(--text-normal); line-height: 1.5; }
+.cordee-page > *, .cordee-reglages > * { min-width: 0; max-width: 100%; }
+.cordee-page :is(h2, h3), .cordee-reglages :is(h2, h3) { margin: 0 0 var(--size-4-3); line-height: 1.3; overflow-wrap: anywhere; }
+.cordee-page p, .cordee-reglages p { margin: var(--size-4-2) 0 var(--size-4-3); overflow-wrap: anywhere; }
+.cordee-page [role="status"]:empty, .cordee-reglages [role="status"]:empty { display: none; }
+.cordee-page .cordee-commandes { align-items: stretch; gap: var(--size-4-2); }
+.cordee-page .cordee-restaurer { margin-top: var(--size-4-4); }
+.cordee-page button.cordee-bouton:not(.clickable-icon), .cordee-reglages button {
+  max-width: 100%; height: auto; min-height: 36px; white-space: normal; overflow-wrap: anywhere; line-height: 1.4;
+}
+.cordee-page input, .cordee-reglages input { box-sizing: border-box; min-width: 0; max-width: 100%; }
+.cordee-page :is(.cordee-lien-invitation, .cordee-choix-photo) { width: 100%; }
+.cordee-page :is(.cordee-profil-apercu, .cordee-fiche-tete) { margin-block: var(--size-4-4); }
+.cordee-page :is(.cordee-profil-apercu, .cordee-fiche-tete) > :last-child { min-width: 0; overflow-wrap: anywhere; }
+.cordee-page .cordee-fiche-tete h2 { margin-bottom: var(--size-4-1); }
+
+/* Les contrôles se replient selon la largeur réelle de la fenêtre, même sur ordinateur. */
+:is(.cordee-page, .cordee-reglages) .setting-item {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center;
+  gap: var(--size-4-3); padding-block: var(--size-4-3);
+}
+:is(.cordee-page, .cordee-reglages) .setting-item-info { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+:is(.cordee-page, .cordee-reglages) .setting-item-control { display: flex; flex-wrap: wrap; min-width: 0; gap: var(--size-4-2); }
+:is(.cordee-page, .cordee-reglages) .setting-item-control input { width: 100%; }
+:is(.cordee-page, .cordee-reglages) .setting-item:not(:has(.setting-item-name:not(:empty))) { grid-template-columns: minmax(0, 1fr); }
+:is(.cordee-page, .cordee-reglages) .setting-item-info:has(.setting-item-name:empty):has(.setting-item-description:empty) { display: none; }
+:is(.cordee-page, .cordee-reglages) .setting-item:not(:has(.setting-item-name:not(:empty))) .setting-item-control { justify-content: flex-start; }
+:is(.cordee-page, .cordee-reglages) .cordee-section { margin-top: var(--size-4-2); padding-block: var(--size-4-2); }
+:is(.cordee-page, .cordee-reglages) .cordee-section > summary { padding-block: var(--size-4-2); overflow-wrap: anywhere; }
+:is(.cordee-page, .cordee-reglages) summary:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; border-radius: var(--radius-s); }
+.cordee-section-corps { min-width: 0; padding-bottom: var(--size-4-2); }
+.cordee-reglages .cordee-moodle { margin-bottom: 0; }
+
+/* L’historique utilise des lignes propres pour ne pas hériter des dimensions du panneau. */
+.cordee-historique { display: flex; flex-direction: column; gap: var(--size-4-2); max-height: 56vh; overflow-y: auto; }
+button.cordee-historique-ligne:not(.clickable-icon) {
+  display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: var(--size-4-3);
+  flex: none; width: 100%; height: auto; padding: var(--size-4-3); border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m); background: var(--background-primary); color: var(--text-normal); box-shadow: none; text-align: start; white-space: normal;
+}
+button.cordee-historique-ligne:not(.clickable-icon):hover { background: var(--background-modifier-hover); }
+button.cordee-historique-ligne.cordee-bouton-principal:not(.clickable-icon) { background: var(--interactive-accent); color: var(--text-on-accent); border-color: transparent; }
+button.cordee-historique-ligne.cordee-bouton-principal:not(.clickable-icon):hover { background: var(--interactive-accent-hover); }
+.cordee-historique-contenu { display: flex; flex-direction: column; min-width: 0; gap: var(--size-4-1); overflow-wrap: anywhere; }
+.cordee-historique-date { color: var(--text-muted); font-size: var(--font-ui-smaller); }
+.cordee-historique-ligne.cordee-bouton-principal .cordee-historique-date { color: inherit; }
+.cordee-historique-ligne.cordee-bouton-principal .cordee-type-changement { color: inherit; background: transparent; }
+.cordee-page .cordee-diff-resume { flex-wrap: wrap; gap: var(--size-4-2) var(--size-4-3); }
+.cordee-page .cordee-diff-ligne { grid-template-columns: 2.5em 2.5em 1.2em minmax(0, 1fr); }
+.cordee-page .cordee-diff { font-size: var(--font-ui-small); }
+
+/* Dates et heures gardent leur largeur intrinsèque sans pousser les champs voisins. */
+.cordee-page .cordee-formulaire { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-block: var(--size-4-3); }
+.cordee-page .cordee-champ { min-width: 0; }
+.cordee-page .cordee-formulaire-horaires .cordee-champ:first-child { grid-column: auto; }
+.cordee-page .cordee-evenement-description { margin-bottom: 0; overflow-wrap: anywhere; }
+.cordee-semaine { min-width: 0; }
+.cordee-semaine-tete .cordee-titre { flex: 1 1 100%; min-width: 0; order: -1; }
+.cordee-semaine-tete > .cordee-commandes:last-child { margin-inline-start: auto; }
+.cordee-semaine .cordee-commandes { gap: var(--size-4-2); max-width: 100%; }
+.cordee-semaine button.cordee-bouton:not(.clickable-icon) { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.cordee-semaine .cordee-legende { gap: var(--size-4-2) var(--size-4-3); overflow-wrap: anywhere; }
+.cordee-semaine .cordee-evenement-texte { overflow-wrap: anywhere; }
+/* Le remplissage ne doit pas agrandir les créneaux de quelques minutes. */
+button.cordee-evenement.cordee-evenement-court:not(.clickable-icon) { padding-block: 0; border-block-width: 0; }
+
+/* Le pied des cours reste dans le flux pour ne masquer ni carte ni champ au clavier. */
+.cordee-page .cordee-moodle-actions { position: static; display: flex; flex-wrap: wrap; gap: var(--size-4-2); margin-top: var(--size-4-4); }
+.cordee-page .cordee-moodle-presentation { color: var(--text-muted); font-size: var(--font-ui-small); }
+.cordee-page .cordee-moodle-presentation > summary { cursor: pointer; }
+.cordee-page .cordee-moodle-description { max-height: 25vh; overflow-y: auto; margin-top: var(--size-4-2); }
+.cordee-page .cordee-moodle-cours { overflow-wrap: anywhere; }
+.cordee-page .cordee-moodle-cours p { padding-inline-start: var(--size-4-3); }
+.cordee-page .cordee-moodle-selection { align-items: flex-start; }
+.cordee-page .cordee-moodle-selection input { flex: none; margin-top: .3em; }
+
+@container (max-width: 540px) {
+  :is(.cordee-page, .cordee-reglages) .setting-item { grid-template-columns: minmax(0, 1fr); gap: var(--size-4-2); }
+  :is(.cordee-page, .cordee-reglages) .setting-item-control { justify-content: flex-start; }
+  :is(.cordee-page, .cordee-reglages) .setting-item-control > button { flex: 1 1 auto; }
+  .cordee-page .cordee-commandes > button { flex: 1 1 auto; }
+  .cordee-page .cordee-formulaire { grid-template-columns: minmax(0, 1fr); }
+  .cordee-page button.cordee-historique-ligne:not(.clickable-icon) { grid-template-columns: 36px minmax(0, 1fr); }
+  .cordee-historique-ligne > .cordee-type-changement { grid-column: 2; justify-self: start; }
+  .cordee-semaine-tete > .cordee-commandes:last-child { margin-inline-start: 0; }
+  .cordee-semaine .cordee-evenement-ligne { flex-direction: column; gap: var(--size-4-1); }
+  .cordee-semaine .cordee-evenement-heure { width: auto; }
+}

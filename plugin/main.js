@@ -1865,14 +1865,21 @@ function accordeon(parent, cle, titre) {
   return { titre: h, actions, corps: d.createEl('div', { cls: 'cordee-accordeon-corps' }) };
 }
 
+// Un cadre dédié garde les formulaires lisibles sans modifier le panneau d’activité.
+function preparerPageSecondaire(modal) {
+  modal.contentEl.addClass?.('cordee-page');
+  modal.modalEl?.classList?.add('cordee-page-modal');
+}
+
 if (O) {
   InvitationModal = class extends O.Modal {
     constructor(app, lien) { super(app); this.lien = lien; }
     onOpen() {
+      preparerPageSecondaire(this);
       const { contentEl: c } = this;
       c.createEl('h3', { text: 'Invitation prête' });
-      c.createEl('p', { text: "Envoie ce lien à ton ami. Il est valable 7 jours, pour 5 personnes au plus." });
-      const champ = c.createEl('input', { type: 'text', value: this.lien, cls: 'cordee-lien-invitation' }); champ.readOnly = true;
+      c.createEl('p', { text: 'Partage ce lien, valable 7 jours pour 5 personnes maximum.' });
+      const champ = c.createEl('input', { type: 'text', value: this.lien, cls: 'cordee-lien-invitation', attr: { 'aria-label': 'Lien d’invitation' } }); champ.readOnly = true;
       new O.Setting(c).addButton((b) => b.setButtonText('Copier').setCta().onClick(async () => {
         try { await navigator.clipboard.writeText(this.lien); new O.Notice('Lien copié'); } catch (e) { champ.select(); }
       }));
@@ -1884,6 +1891,7 @@ if (O) {
   FicheMembreModal = class extends O.Modal {
     constructor(app, plugin, membre, infos) { super(app); this.plugin = plugin; this.membre = membre; this.infos = infos; }
     onOpen() {
+      preparerPageSecondaire(this);
       const c = this.contentEl, m = this.membre, i = this.infos;
       c.empty(); this.modalEl?.classList.add('cordee-fiche-modal');
       const tete = c.createEl('div', { cls: 'cordee-fiche-tete' });
@@ -1902,6 +1910,7 @@ if (O) {
   ProfilModal = class extends O.Modal {
     constructor(app, plugin) { super(app); this.plugin = plugin; }
     async onOpen() {
+      preparerPageSecondaire(this);
       const { contentEl: c } = this;
       this.ferme = false;
       const tour = this.tour = (this.tour || 0) + 1;
@@ -1910,7 +1919,7 @@ if (O) {
       const actif = () => !this.ferme && this.tour === tour && memeConnexion();
       c.empty();
       c.createEl('h3', { text: 'Mon profil' });
-      c.createEl('p', { text: 'Ta photo sera visible par les membres de ce coffre, à côté de tes changements. Elle est recadrée en carré et ses métadonnées sont retirées sur cet appareil.' });
+      c.createEl('p', { text: 'Ton nom et ta photo sont visibles par les membres du coffre.' });
       const etat = c.createEl('p', { text: 'Chargement du profil…', cls: 'cordee-details', attr: { role: 'status', 'aria-live': 'polite' } });
       try {
         const info = await (await this.plugin.moteur.api('GET', `/api/coffres/${coffreId}`)).json();
@@ -1923,11 +1932,11 @@ if (O) {
         const montrer = (avatar) => { apercu.empty(); afficherAvatar(apercu, moi.nom, avatar); apercu.createEl('span', { text: moi.nom }); };
         montrer(actuel);
         let saisieNom = moi.nom, champNom, enregistrerNom;
-        new O.Setting(c).setName('Nom affiché').setDesc('De 1 à 60 caractères. Visible par les membres de ce coffre et dans ton activité.').addText((champ) => {
+        new O.Setting(c).setName('Nom affiché').setDesc('De 1 à 60 caractères.').addText((champ) => {
           champNom = champ;
           champ.setValue(saisieNom).onChange((valeur) => { saisieNom = valeur; });
           champ.inputEl.maxLength = 60;
-        }).addButton((b) => { enregistrerNom = b; b.setButtonText('Enregistrer le nom').onClick(async () => {
+        }).addButton((b) => { enregistrerNom = b; b.setButtonText('Enregistrer le nom').setCta().onClick(async () => {
           if (!actif() || occupe) return;
           const nom = saisieNom.trim();
           if (!nom || nom.length > 60) { etat.setText('Le nom affiché doit contenir de 1 à 60 caractères.'); return; }
@@ -1953,8 +1962,11 @@ if (O) {
           }
           if (actif()) { occupe = false; boutons(); }
         }); });
-        c.createEl('label', { text: 'Choisir une photo (JPEG, PNG ou WebP, 10 Mo maximum)', cls: 'cordee-details' });
-        const fichier = c.createEl('input', { type: 'file', cls: 'cordee-choix-photo', attr: { accept: 'image/jpeg,image/png,image/webp', 'aria-label': 'Choisir ma photo de profil' } });
+        const photo = c.createEl('details', { cls: 'cordee-section' });
+        photo.createEl('summary', { text: 'Photo de profil' });
+        photo.createEl('p', { text: 'Recadrée sur cet appareil, sans métadonnées.', cls: 'cordee-details' });
+        photo.createEl('label', { text: 'Choisir une photo (JPEG, PNG ou WebP, 10 Mo maximum)', cls: 'cordee-details' });
+        const fichier = photo.createEl('input', { type: 'file', cls: 'cordee-choix-photo', attr: { accept: 'image/jpeg,image/png,image/webp', 'aria-label': 'Choisir ma photo de profil' } });
         let enregistrer, retirer;
         const boutons = () => { enregistrer?.setDisabled(occupe || !choix); retirer?.setDisabled(occupe || !actuel); enregistrerNom.setDisabled(occupe); champNom.inputEl.disabled = occupe; fichier.disabled = occupe; };
         const sauver = async (avatar) => {
@@ -1970,7 +1982,7 @@ if (O) {
             if (actif()) etat.setText(erreur.statut === 404 ? 'Ce serveur ne prend pas encore en charge les photos. Mets le serveur Cordée à jour.' : 'Photo non enregistrée. ' + expliquerErreur(erreur));
           } finally { if (actif()) { occupe = false; boutons(); } }
         };
-        new O.Setting(c).addButton((b) => { enregistrer = b; b.setButtonText('Enregistrer la photo').setCta().onClick(() => choix && sauver(choix)); }).addButton((b) => { retirer = b; b.setButtonText('Retirer la photo').onClick(() => actuel && sauver(null)); });
+        new O.Setting(photo).addButton((b) => { enregistrer = b; b.setButtonText('Enregistrer la photo').onClick(() => choix && sauver(choix)); }).addButton((b) => { retirer = b; b.setButtonText('Retirer la photo').onClick(() => actuel && sauver(null)); });
         fichier.onchange = async () => {
           const selection = ++lecture;
           choix = null; boutons();
@@ -1994,11 +2006,12 @@ if (O) {
   RevisionModal = class extends O.Modal {
     constructor(app, plugin, revision, membre) { super(app); this.plugin = plugin; this.revision = revision; this.membre = membre; }
     async onOpen() {
+      preparerPageSecondaire(this);
       const c = this.contentEl, p = this.plugin;
       this.ferme = false; const tour = this.tour = (this.tour || 0) + 1;
       const coffreId = p.etat.coffreId, jeton = p.etat.jeton;
       const actif = () => !this.ferme && this.tour === tour && !p.arret && p.etat.coffreId === coffreId && p.etat.jeton === jeton;
-      this.modalEl?.classList.add('cordee-tableau-modal');
+
       c.empty(); c.createEl('div', { text: 'COMPARAISON', cls: 'cordee-surtitre' });
       const titre = c.createEl('h2', { text: `Révision ${this.revision}`, cls: 'cordee-titre' });
       const zone = c.createEl('div', { text: 'Chargement des deux versions…', cls: 'cordee-details', attr: { role: 'status' } });
@@ -2012,10 +2025,10 @@ if (O) {
         auteur.createEl('span', { text: `${ch.auteur || 'Membre'} · ${new Date(ch.le).toLocaleString('fr-FR')} · révision ${ch.rev}` });
         let diff = null;
         if (r.raison) {
-          zone.createEl('p', { text: r.raison === 'dossier' ? 'Ce changement concerne un dossier. Il n’y a pas de texte à comparer.' : r.raison === 'volumineux' ? 'Cette version dépasse la limite de comparaison de 256 Ko. Le fichier reste disponible dans le coffre.' : r.raison === 'indisponible' ? 'Une version historique manque sur le serveur. Aucune différence approximative n’est présentée.' : 'Ce fichier est une image, un PDF ou un autre fichier binaire. La comparaison ligne par ligne est réservée aux notes texte.', cls: 'cordee-vide' });
+          zone.createEl('p', { text: r.raison === 'dossier' ? 'Ce dossier ne contient pas de texte à comparer.' : r.raison === 'volumineux' ? 'Ce fichier dépasse la limite de comparaison de 256 Ko.' : r.raison === 'indisponible' ? 'Une version historique manque sur le serveur.' : 'La comparaison est réservée aux notes texte.', cls: 'cordee-vide' });
         } else {
           diff = calculerDiff(r.avant ?? '', r.apres ?? '');
-          if (diff.limite) zone.createEl('p', { text: 'Cette note est trop longue pour une comparaison détaillée sur cet appareil. Aucune sélection automatique ne sera appliquée.', cls: 'cordee-vide' });
+          if (diff.limite) zone.createEl('p', { text: 'Cette note est trop longue pour une comparaison détaillée.', cls: 'cordee-vide' });
           else {
             const ajouts = diff.lignes.filter((l) => l.type === 'ajout').length, suppressions = diff.lignes.filter((l) => l.type === 'suppression').length;
             const resume = zone.createEl('div', { cls: 'cordee-diff-resume' });
@@ -2023,7 +2036,7 @@ if (O) {
             resume.createEl('span', { text: `−${suppressions} suppression${suppressions > 1 ? 's' : ''}`, cls: 'cordee-compte-suppression' });
             if (!ajouts && !suppressions) zone.createEl('p', { text: 'Aucune différence textuelle entre ces deux versions.', cls: 'cordee-vide' });
             else {
-              zone.createEl('p', { text: 'Rouge : version précédente. Vert : version enregistrée par ce membre.', cls: 'cordee-details' });
+              zone.createEl('p', { text: 'Rouge : avant · Vert : après.', cls: 'cordee-details' });
               const tableau = zone.createEl('div', { cls: 'cordee-diff', attr: { role: 'table', 'aria-label': 'Différences entre les versions' } });
               let interruption = false;
               diff.lignes.forEach((ligne, index) => {
@@ -2049,18 +2062,20 @@ if (O) {
             const editeur = vue?.file?.path === ch.chemin ? vue.editor : null;
             const bloc = diff && typeof r.apres === 'string' ? premierBlocModifie(diff, r.apres) : null;
             if (bloc && editeur?.getValue() === r.apres) { editeur.setSelection(bloc.de, bloc.a); editeur.scrollIntoView?.({ from: bloc.de, to: bloc.a }, true); retour.setText('Premier bloc modifié sélectionné dans la note.'); }
-            else retour.setText('Note ouverte. La sélection est disponible seulement si son texte correspond exactement à cette version historique.');
-          } catch { if (actif()) retour.setText('Impossible d’ouvrir cette note sur cet appareil. La comparaison historique reste disponible.'); }
-        });
+            else retour.setText('Note ouverte, sans sélection automatique du bloc.');
+          } catch { if (actif()) retour.setText('Impossible d’ouvrir cette note sur cet appareil.'); }
+        }, { cls: 'cordee-bouton-principal' });
         // Remonter le temps : deux clics (le premier demande confirmation), puis la version part chez tous.
         if (ch.type !== 'dossier') {
-          const actions = zone.createEl('div', { cls: 'cordee-commandes cordee-restaurer' });
+          const restauration = zone.createEl('details', { cls: 'cordee-section cordee-restaurer' });
+          restauration.createEl('summary', { text: 'Restaurer une version' });
+          const actions = restauration.createEl('div', { cls: 'cordee-commandes' });
           const proposer = (texte, hash) => {
             let arme = false;
             const bouton = boutonCordee(actions, texte, async () => {
               if (!arme) { arme = true; bouton.setText('Confirmer : remplacer la version actuelle'); bouton.setAttribute('aria-label', 'Confirmer : remplacer la version actuelle par celle-ci'); bouton.addClass?.('cordee-bouton-danger'); return; }
               bouton.disabled = true;
-              try { await p.restaurer(ch.chemin, hash); if (actif()) retour.setText('Version restaurée sur cet appareil. Elle part chez les autres à la prochaine synchronisation ; l’ancienne reste dans l’historique.'); }
+              try { await p.restaurer(ch.chemin, hash); if (actif()) retour.setText('Version restaurée et bientôt partagée ; la précédente reste dans l’historique.'); }
               catch (e) { if (actif()) retour.setText('Restauration impossible : ' + (e?.message || 'erreur inconnue')); bouton.disabled = false; }
             }, { cls: 'cordee-bouton-discret' });
           };
@@ -2300,13 +2315,14 @@ if (O) {
   HistoriqueModal = class extends O.Modal {
     constructor(app, plugin, chemin) { super(app); this.plugin = plugin; this.chemin = chemin; }
     async onOpen() {
+      preparerPageSecondaire(this);
       const c = this.contentEl, p = this.plugin;
       this.ferme = false;
-      this.modalEl?.classList.add('cordee-tableau-modal');
+
       c.empty(); c.createEl('div', { text: 'HISTORIQUE', cls: 'cordee-surtitre' });
       c.createEl('h2', { text: nomFichier(this.chemin), cls: 'cordee-titre' });
       if (dossierDe(this.chemin)) c.createEl('div', { text: dossierDe(this.chemin), cls: 'cordee-details' });
-      const zone = c.createEl('div', { cls: 'cordee-fichiers cordee-historique', attr: { 'aria-live': 'polite' } });
+      const zone = c.createEl('div', { cls: 'cordee-historique', attr: { 'aria-live': 'polite' } });
       zone.createEl('p', { text: 'Chargement des versions…', cls: 'cordee-vide' });
       if (!p.connecte()) { zone.empty(); zone.createEl('p', { text: 'Rejoins un coffre pour voir l’historique.', cls: 'cordee-vide' }); return; }
       try {
@@ -2316,15 +2332,15 @@ if (O) {
         if (!r.changements.length) { zone.createEl('p', { text: 'Pas encore de version partagée pour cette note.', cls: 'cordee-vide' }); return; }
         const profils = new Map((r.membres || []).map((m) => [m.id, m]));
         r.changements.forEach((ch, i) => {
-          const carte = boutonCordee(zone, '', () => new RevisionModal(this.app, p, ch.rev, profils.get(ch.auteurId)).open(), { label: `Comparer la révision ${ch.rev}`, cls: 'cordee-fichier' });
+          const carte = boutonCordee(zone, '', () => new RevisionModal(this.app, p, ch.rev, profils.get(ch.auteurId)).open(), { label: `Comparer la révision ${ch.rev}`, cls: 'cordee-historique-ligne' + (i === 0 ? ' cordee-bouton-principal' : '') });
           afficherAvatar(carte, ch.auteur, profils.get(ch.auteurId)?.avatar);
-          const contenu = carte.createEl('span', { cls: 'cordee-fichier-contenu' });
-          contenu.createEl('strong', { text: `${ch.auteur || 'Membre'} · ${ilYa(ch.le)}`, cls: 'cordee-fichier-chemin' });
-          contenu.createEl('span', { text: `${new Date(ch.le).toLocaleString('fr-FR')} · révision ${ch.rev}${i === 0 ? ' · version actuelle' : ''}`, cls: 'cordee-fichier-auteur' });
+          const contenu = carte.createEl('span', { cls: 'cordee-historique-contenu' });
+          contenu.createEl('strong', { text: `${ch.auteur || 'Membre'} · ${ilYa(ch.le)}`, cls: 'cordee-historique-auteur' });
+          contenu.createEl('span', { text: `${new Date(ch.le).toLocaleString('fr-FR')} · révision ${ch.rev}${i === 0 ? ' · version actuelle' : ''}`, cls: 'cordee-historique-date' });
           const genre = ch.supprime ? 'supprime' : ch.avantHash ? 'modifie' : 'ajoute';
           carte.createEl('span', { text: { supprime: 'Supprimé', modifie: 'Modifié', ajoute: 'Créé' }[genre], cls: `cordee-type-changement cordee-type-${genre}` });
         });
-        c.createEl('p', { text: 'Clique sur une version pour voir ce qui a changé et, si besoin, la restaurer.', cls: 'cordee-details' });
+        c.createEl('p', { text: 'Choisis une version pour la comparer.', cls: 'cordee-details' });
       } catch (erreur) { if (!this.ferme) { zone.empty(); zone.createEl('p', { text: erreur.statut === 404 ? 'L’historique demande un serveur Cordée à jour.' : expliquerErreur(erreur), cls: 'cordee-vide' }); } }
     }
     onClose() { this.ferme = true; this.contentEl.empty(); }
@@ -2371,14 +2387,14 @@ if (O) {
 
     const tete = c.createEl('div', { cls: 'cordee-semaine-tete' });
     const nav = tete.createEl('div', { cls: 'cordee-commandes' });
-    boutonCordee(nav, '‹', () => changer(decalerJours(debut, -7)), { label: 'Semaine précédente', cls: 'cordee-bouton-discret' });
+    boutonCordee(nav, '‹', () => changer(decalerJours(debut, -7)), { label: 'Semaine précédente', icone: 'chevron-left', cls: 'cordee-bouton-discret' });
     boutonCordee(nav, 'Aujourd’hui', () => changer(debutSemaine(Date.now())), { cls: 'cordee-bouton-discret' });
-    boutonCordee(nav, '›', () => changer(decalerJours(debut, 7)), { label: 'Semaine suivante', cls: 'cordee-bouton-discret' });
+    boutonCordee(nav, '›', () => changer(decalerJours(debut, 7)), { label: 'Semaine suivante', icone: 'chevron-right', cls: 'cordee-bouton-discret' });
     const d0 = new Date(jours[0]), d6 = new Date(jours[6]);
     tete.createEl('h2', { text: `Semaine du ${d0.toLocaleDateString('fr-FR', { day: 'numeric', month: d0.getMonth() === d6.getMonth() ? undefined : 'long' })} au ${d6.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long' })}`, cls: 'cordee-titre' });
     const actions = tete.createEl('div', { cls: 'cordee-commandes' });
     boutonCordee(actions, 'Ajouter un créneau', () => new CreneauModal(plugin.app, plugin, jourIso(Math.max(debut, Date.now()))).open(), { cls: 'cordee-bouton-principal' });
-    boutonCordee(actions, 'Actualiser', () => plugin.actualiserCalendriers({ forcer: true }), { cls: 'cordee-bouton-discret' });
+    boutonCordee(actions, 'Actualiser', () => plugin.actualiserCalendriers({ forcer: true }), { icone: 'refresh-cw', cls: 'cordee-bouton-discret' });
 
     const legende = c.createEl('div', { cls: 'cordee-legende' });
     const toutes = plugin.toutesSources(await plugin.texteAgenda());
@@ -2390,7 +2406,7 @@ if (O) {
     }
     if (!toutes.length) {
       const vide = c.createEl('div', { cls: 'cordee-semaine-vide' });
-      vide.createEl('p', { text: 'Ajoute le lien iCal de ton emploi du temps dans les réglages de Cordée, « pour toute la cordée » s’il est commun au groupe. Ton lien Moodle (devoirs à rendre) s’ajoute « pour moi » : il est personnel. Les créneaux de l’agenda de la cordée sont partagés avec le groupe.', cls: 'cordee-details' });
+      vide.createEl('p', { text: 'Ajoute ton emploi du temps ou tes échéances Moodle dans les réglages.', cls: 'cordee-details' });
       boutonCordee(vide, 'Ajouter mon emploi du temps', () => plugin.ouvrirReglages(), { cls: 'cordee-bouton-discret' });
     }
 
@@ -2422,9 +2438,11 @@ if (O) {
       const fin = new Date(j); fin.setHours(hFin, 0, 0, 0);
       const etendue = fin.getTime() - origine.getTime();
       for (const { e, colonne: rang, colonnes } of placerEnColonnes(horaires.filter((x) => touche(x, j)))) {
-        const de = Math.max(e.debut, origine.getTime()), a = Math.min(Math.max(e.fin, e.debut + 15 * 60_000), fin.getTime());
-        const b = boutonCordee(colonne, '', () => ouvrir(e), { label: `${e.titre}, ${heure(e.debut)} à ${heure(e.fin)}${e.lieu ? ', ' + e.lieu : ''}`, cls: 'cordee-evenement' });
-        if (b.style) Object.assign(b.style, { top: `${(de - origine.getTime()) / etendue * 100}%`, height: `${Math.max(3, (a - de) / etendue * 100)}%`, left: `${rang / colonnes * 100}%`, width: `${100 / colonnes}%` });
+        // La hauteur suit la durée réelle pour ne pas recouvrir le créneau suivant.
+        const de = Math.max(e.debut, origine.getTime()), a = Math.min(e.fin, fin.getTime());
+        const b = boutonCordee(colonne, '', () => ouvrir(e), { label: `${e.titre}, ${heure(e.debut)} à ${heure(e.fin)}${e.lieu ? ', ' + e.lieu : ''}`, cls: 'cordee-evenement' + (a - de < 30 * 60_000 ? ' cordee-evenement-court' : '') });
+        b.setAttribute('title', b.getAttribute('aria-label'));
+        if (b.style) Object.assign(b.style, { top: `${(de - origine.getTime()) / etendue * 100}%`, height: `${Math.max(0, (a - de) / etendue * 100)}%`, left: `${rang / colonnes * 100}%`, width: `${100 / colonnes}%` });
         b.style?.setProperty?.('--cordee-couleur', e.couleur);
         b.createEl('strong', { text: e.titre });
         b.createEl('span', { text: `${heure(e.debut)}–${heure(e.fin)}${e.lieu ? ' · ' + e.lieu : ''}` });
@@ -2472,8 +2490,9 @@ if (O) {
   EvenementModal = class extends O.Modal {
     constructor(app, plugin, e) { super(app); this.plugin = plugin; this.e = e; }
     onOpen() {
+      preparerPageSecondaire(this);
       const c = this.contentEl, e = this.e, p = this.plugin;
-      c.empty(); this.modalEl?.classList.add('cordee-tableau-modal');
+      c.empty();
       const sur = c.createEl('div', { text: (LIBELLES_SOURCE[e.type] || 'Calendrier').toUpperCase(), cls: 'cordee-surtitre' });
       sur.style?.setProperty?.('color', e.couleur);
       c.createEl('h2', { text: e.titre, cls: 'cordee-titre' });
@@ -2481,7 +2500,11 @@ if (O) {
       c.createEl('p', { text: e.journee ? `${date} · toute la journée` : estEcheance(e) ? `À rendre le ${date} à ${heure(e.debut)}` : `${date} · ${heure(e.debut)}–${heure(e.fin)}`, cls: 'cordee-evenement-quand' });
       if (e.lieu) c.createEl('p', { text: `Où : ${e.lieu}`, cls: 'cordee-details' });
       if (e.auteur) c.createEl('p', { text: `Ajouté par ${e.auteur}`, cls: 'cordee-details' });
-      if (e.description) c.createEl('p', { text: e.description, cls: 'cordee-evenement-description' });
+      if (e.description) {
+        const details = c.createEl('details', { cls: 'cordee-section' });
+        details.createEl('summary', { text: 'Description' });
+        details.createEl('p', { text: e.description, cls: 'cordee-evenement-description' });
+      }
       const actions = c.createEl('div', { cls: 'cordee-commandes cordee-restaurer' });
       boutonCordee(actions, 'Créer une note partagée', async () => { try { await p.creerNoteEvenement(e); this.close(); } catch (err) { new O.Notice('Cordée : ' + (err?.message || 'note impossible à créer')); } }, { cls: 'cordee-bouton-principal' });
       if (e.type === 'cordee') boutonCordee(actions, 'Ouvrir l’agenda de la cordée', async () => { await this.app.workspace.openLinkText(NOTE_AGENDA, '', false); this.close(); }, { cls: 'cordee-bouton-discret' });
@@ -2493,14 +2516,15 @@ if (O) {
   CreneauModal = class extends O.Modal {
     constructor(app, plugin, jour, valeurs = {}) { super(app); this.plugin = plugin; this.valeurs = { jour: jour || jourIso(Date.now()), titre: '', debut: '', fin: '', lieu: '', ...valeurs }; }
     onOpen() {
+      preparerPageSecondaire(this);
       const c = this.contentEl, v = this.valeurs, p = this.plugin;
-      c.empty(); this.modalEl?.classList.add('cordee-tableau-modal');
+      c.empty();
       c.createEl('div', { text: 'AGENDA DE LA CORDÉE', cls: 'cordee-surtitre' });
       c.createEl('h2', { text: 'Ajouter un créneau', cls: 'cordee-titre' });
-      c.createEl('p', { text: 'Il apparaît dans la semaine de chaque membre (révision, projet, rendu…).', cls: 'cordee-details' });
+      c.createEl('p', { text: 'Ce créneau sera visible par toute la cordée.', cls: 'cordee-details' });
       const formulaire = c.createEl('div', { cls: 'cordee-formulaire' });
-      const champ = (libelle, cle, type, attr = {}) => {
-        const l = formulaire.createEl('label', { cls: 'cordee-champ' });
+      const champ = (libelle, cle, type, attr = {}, parent = formulaire) => {
+        const l = parent.createEl('label', { cls: 'cordee-champ' });
         l.createEl('span', { text: libelle });
         const input = l.createEl('input', { attr: { type, value: v[cle] || '', ...attr } });
         input.value = v[cle] || '';
@@ -2510,9 +2534,13 @@ if (O) {
       };
       champ('Quoi', 'titre', 'text', { placeholder: 'Révision ENER3', maxlength: '120' });
       champ('Jour', 'jour', 'date');
-      champ('Début (facultatif)', 'debut', 'time');
-      champ('Fin (facultatif)', 'fin', 'time');
-      champ('Où (facultatif)', 'lieu', 'text', { placeholder: 'BU, salle, en ligne…', maxlength: '80' });
+      const precisions = c.createEl('details', { cls: 'cordee-section' });
+      precisions.open = !!(v.debut || v.fin || v.lieu);
+      precisions.createEl('summary', { text: 'Heures et lieu' });
+      const horaires = precisions.createEl('div', { cls: 'cordee-formulaire cordee-formulaire-horaires' });
+      champ('Début (facultatif)', 'debut', 'time', {}, horaires);
+      champ('Fin (facultatif)', 'fin', 'time', {}, horaires);
+      champ('Où (facultatif)', 'lieu', 'text', { placeholder: 'BU, salle, en ligne…', maxlength: '80' }, horaires);
       const retour = c.createEl('p', { cls: 'cordee-details', attr: { role: 'status' } });
       const actions = c.createEl('div', { cls: 'cordee-commandes cordee-restaurer' });
       boutonCordee(actions, 'Ajouter à l’agenda', async () => {
@@ -2547,7 +2575,7 @@ if (O) {
     /** Calendriers iCal de cet appareil : emploi du temps, Moodle… Les liens ne quittent jamais l'appareil. */
     afficherCalendriers(c, rafraichir) {
       const p = this.plugin;
-      c.createEl('p', { text: 'Lien iCal de l’emploi du temps (ADE…) ou de Moodle (Calendrier → Exporter). Cours et devoirs apparaissent dans la Semaine.', cls: 'cordee-details' });
+      c.createEl('p', { text: 'Ajoute un lien iCal pour voir tes cours et échéances dans la Semaine.', cls: 'cordee-details' });
       // Calendriers partagés : lus dans la note commune (lecture asynchrone, affichés dès qu'ils sont là).
       const zonePartages = c.createEl('div');
       p.texteAgenda().then((texte) => {
@@ -2565,8 +2593,8 @@ if (O) {
           .addButton((b) => b.setButtonText('Retirer').onClick(async () => { await p.retirerCalendrier(s.id); rafraichir(); }));
       }
       const f = this.formCalendrier || (this.formCalendrier = { nom: '', url: '' });
-      new O.Setting(c).setName('Nom').setDesc('Par exemple : Emploi du temps, Moodle').addText((t) => t.setPlaceholder('Emploi du temps').setValue(f.nom).onChange((v) => { f.nom = v; }));
-      new O.Setting(c).setName('Lien iCal').setDesc('Commence par https:// ou webcal://. Masqué à l’écran : il contient souvent une clé personnelle.').addText((t) => { t.inputEl.type = 'password'; t.setPlaceholder('https://…').setValue(f.url).onChange((v) => { f.url = v; }); });
+      new O.Setting(c).setName('Nom').addText((t) => t.setPlaceholder('Emploi du temps').setValue(f.nom).onChange((v) => { f.nom = v; }));
+      new O.Setting(c).setName('Lien iCal').setDesc('Lien https:// ou webcal://, masqué pour protéger ta clé.').addText((t) => { t.inputEl.type = 'password'; t.setPlaceholder('https://…').setValue(f.url).onChange((v) => { f.url = v; }); });
       const ajouter = async (pourTous) => {
         try {
           const s = pourTous ? await p.ajouterCalendrierPourTous(f.nom, f.url) : await p.ajouterCalendrier(f.nom, f.url);
@@ -2577,9 +2605,10 @@ if (O) {
           rafraichir();
         } catch (e) { new O.Notice('Cordée : ' + e.message); }
       };
-      new O.Setting(c).setDesc('« Pour toute la cordée » : chacun voit le même emploi du temps.')
-        .addButton((b) => b.setButtonText('Ajouter pour moi').onClick(() => ajouter(false)))
-        .addButton((b) => b.setButtonText('Ajouter pour toute la cordée').setCta().onClick(() => ajouter(true)));
+      new O.Setting(c).addButton((b) => b.setButtonText('Ajouter pour moi').setCta().onClick(() => ajouter(false)));
+      const partage = sectionRepliable(c, 'Partager un emploi du temps', 'partage-calendrier', this);
+      new O.Setting(partage).setDesc('Réservé aux emplois du temps communs ; les liens Moodle restent personnels.')
+        .addButton((b) => b.setButtonText('Ajouter pour toute la cordée').onClick(() => ajouter(true)));
       new O.Setting(c).setName('La semaine').addButton((b) => b.setButtonText('Ouvrir la semaine').onClick(() => p.ouvrirSemaine()));
     }
     hide() { this.nettoyer(); }
@@ -2587,6 +2616,7 @@ if (O) {
       const p = this.plugin, e = p.etat, f = this.form;
       this.nettoyer();
       c.empty();
+      c = c.createEl('div', { cls: 'cordee-reglages' });
       if (p.connecte()) {
         c.createEl('h3', { text: `Coffre partagé : ${e.nomCoffre}` });
         const identite = c.createEl('p');
@@ -2596,9 +2626,9 @@ if (O) {
         let boutonPause;
         const automatique = new O.Setting(c).setName('Synchronisation automatique').addButton((b) => { boutonPause = b; b.onClick(async () => { await p.mettreEnPause(!e.enPause); }); });
         this.desabonner = p.abonnerStatut(() => {
-          identite.setText(`Serveur ${e.serveur} · connecté en tant que ${e.prenom}`);
+          identite.setText(`${e.prenom} · ${e.serveur}`);
           boutonPause.setButtonText(e.enPause ? 'Reprendre' : 'Mettre en pause');
-          automatique.setDesc(e.enPause ? 'Tes prochaines modifications resteront locales jusqu’à la reprise.' : 'Envoi des modifications et réception des changements du groupe.');
+          automatique.setDesc(e.enPause ? 'Tes modifications restent locales jusqu’à la reprise.' : 'Tes modifications sont partagées automatiquement.');
           statut.setText(p.titreStatut());
           const derniere = e.derniereSynchro ? new Date(e.derniereSynchro).toLocaleString('fr-FR') : 'pas encore effectuée';
           chiffres.setText(`${Object.keys(e.bases).length} fichiers partagés · Dernière synchronisation : ${derniere}`);
@@ -2611,41 +2641,44 @@ if (O) {
           .addButton((b) => b.setButtonText('Synchroniser').onClick(() => p.lancer({ forcer: true })))
           .addButton((b) => b.setButtonText('Activité').onClick(() => new ActiviteModal(this.app, p).open()))
           .addButton((b) => b.setButtonText('Mon profil').onClick(() => new ProfilModal(this.app, p).open()));
-        new O.Setting(c).setName('Partager les vidéos').setDesc('Désactivé : les vidéos (mp4, mov…) restent sur cet appareil.').addToggle((t) => t.setValue(!!e.partagerVideos).onChange(async (v) => { e.partagerVideos = v; await p.saveData(e); p.programmer(0); }));
-        new O.Setting(c).setName('Dossiers non partagés').setDesc('Séparés par des virgules : Brouillons, Perso').addText((t) => t.setValue(e.dossiersIgnores).onChange(async (v) => { e.dossiersIgnores = v; await p.saveData(e); }));
+        const options = sectionRepliable(c, 'Options du coffre', 'coffre', this);
+        new O.Setting(options).setName('Partager les vidéos').setDesc('Désactivé : les vidéos (mp4, mov…) restent sur cet appareil.').addToggle((t) => t.setValue(!!e.partagerVideos).onChange(async (v) => { e.partagerVideos = v; await p.saveData(e); p.programmer(0); }));
+        new O.Setting(options).setName('Dossiers non partagés').setDesc('Séparés par des virgules : Brouillons, Perso').addText((t) => t.setValue(e.dossiersIgnores).onChange(async (v) => { e.dossiersIgnores = v; await p.saveData(e); }));
+        new O.Setting(options).setName('Quitter ce coffre').setDesc('Tes fichiers restent sur cet appareil.').addButton((b) => b.setButtonText('Quitter').setWarning().onClick(async () => { await p.quitter(); rafraichir(); }));
         // Calendriers et Moodle sont repliés : on ne les règle qu'une fois.
         this.afficherCalendriers(sectionRepliable(c, 'Calendriers', 'calendriers', this), rafraichir);
         afficherReglagesMoodle(sectionRepliable(c, 'Moodle', 'moodle', this), p);
-        new O.Setting(c).setName('Quitter ce coffre').setDesc('Tes fichiers restent sur cet appareil.').addButton((b) => b.setButtonText('Quitter').setWarning().onClick(async () => { await p.quitter(); rafraichir(); }));
         return;
       }
-      c.createEl('h3', { text: 'Rejoindre un coffre' });
-      c.createEl('p', { text: 'Pars de préférence d’un coffre vide. Les notes de ce coffre seront partagées avec le groupe.' });
-      new O.Setting(c).setName('Nom affiché').setDesc('Visible par le groupe. Tu pourras le modifier dans Mon profil.').addText((t) => t.setValue(f.prenom).onChange((v) => { f.prenom = v; }));
+      c.createEl('h3', { text: f.creer ? 'Créer un coffre partagé' : 'Rejoindre un coffre' });
+      c.createEl('p', { text: 'Les notes de ce coffre seront partagées : pars de préférence d’un coffre vide.' });
+      new O.Setting(c).setName('Nom affiché').setDesc('Visible par le groupe.').addText((t) => t.setValue(f.prenom).onChange((v) => { f.prenom = v; }));
       const serveur = new O.Setting(c).setName('Serveur').setDesc(f.serveur || 'Une invitation complète renseigne le serveur automatiquement.').addButton((b) => b.setButtonText('Changer de serveur').onClick(() => { f.adresseVisible = !f.adresseVisible; rafraichir(); }));
       let champServeur;
       if (f.adresseVisible || (!f.serveur && f.creer)) new O.Setting(c).setName('Adresse du serveur').addText((t) => { champServeur = t; t.setPlaceholder('https://cordee.exemple.fr').setValue(f.serveur).onChange((v) => { f.serveur = v.trim(); serveur.setDesc(f.serveur || 'Colle une invitation complète ou indique le serveur.'); }); });
-      new O.Setting(c).setName('Invitation ou code').setDesc('Colle le lien reçu. Si le serveur est déjà renseigné, le code seul suffit.').addText((t) => t.setValue(f.invitation).onChange((v) => {
-        f.invitation = v;
-        const invitation = lireInvitation(v, f.serveur);
-        if (invitation) { f.serveur = invitation.serveur; champServeur?.setValue(f.serveur); serveur.setDesc(`Serveur de l’invitation : ${invitation.serveur}`); }
-      }));
-      new O.Setting(c).addButton((b) => b.setButtonText('Rejoindre').setCta().onClick(async () => {
-        const inv = lireInvitation(f.invitation, f.serveur);
-        if (!inv?.serveur || !/^[A-Za-z0-9-]{1,20}$/.test(inv.code)) { new O.Notice('Colle une invitation complète, ou indique le serveur pour utiliser un code seul.'); return; }
-        if (!f.prenom.trim() || f.prenom.trim().length > 60) { new O.Notice('Indique un nom affiché de 1 à 60 caractères.'); return; }
-        e.dossiersIgnores = f.dossiersIgnores;
-        try { await p.rejoindreOuCreer('/api/rejoindre', { code: inv.code, prenom: f.prenom.trim() }, inv.serveur); rafraichir(); }
-        catch (err) { new O.Notice('Cordée : ' + err.message); }
-      }));
-      new O.Setting(c).setName('Dossiers non partagés').setDesc('Facultatif. À exclure avant le premier envoi, séparés par des virgules.').addText((t) => t.setValue(f.dossiersIgnores).onChange((v) => { f.dossiersIgnores = v; }));
+      if (!f.creer) {
+        new O.Setting(c).setName('Invitation ou code').setDesc('Colle ton invitation, ou le code si le serveur est renseigné.').addText((t) => t.setValue(f.invitation).onChange((v) => {
+          f.invitation = v;
+          const invitation = lireInvitation(v, f.serveur);
+          if (invitation) { f.serveur = invitation.serveur; champServeur?.setValue(f.serveur); serveur.setDesc(`Serveur de l’invitation : ${invitation.serveur}`); }
+        }));
+        new O.Setting(c).addButton((b) => b.setButtonText('Rejoindre').setCta().onClick(async () => {
+          const inv = lireInvitation(f.invitation, f.serveur);
+          if (!inv?.serveur || !/^[A-Za-z0-9-]{1,20}$/.test(inv.code)) { new O.Notice('Colle une invitation complète, ou indique le serveur pour utiliser un code seul.'); return; }
+          if (!f.prenom.trim() || f.prenom.trim().length > 60) { new O.Notice('Indique un nom affiché de 1 à 60 caractères.'); return; }
+          e.dossiersIgnores = f.dossiersIgnores;
+          try { await p.rejoindreOuCreer('/api/rejoindre', { code: inv.code, prenom: f.prenom.trim() }, inv.serveur); rafraichir(); }
+          catch (err) { new O.Notice('Cordée : ' + err.message); }
+        }));
+      }
+      new O.Setting(sectionRepliable(c, 'Options de partage', 'exclusions', this)).setName('Dossiers non partagés').setDesc('À exclure avant l’envoi, séparés par des virgules.').addText((t) => t.setValue(f.dossiersIgnores).onChange((v) => { f.dossiersIgnores = v; }));
       if (!f.creer) {
         new O.Setting(c).setName('Partager ce coffre avec des amis').setDesc('Crée un nouveau groupe sur ton serveur.').addButton((b) => b.setButtonText('Créer un nouveau partage').onClick(() => { f.creer = true; rafraichir(); }));
         afficherReglagesMoodle(sectionRepliable(c, 'Moodle', 'moodle', this), p);
         return;
       }
-      c.createEl('h3', { text: 'Ou créer un coffre partagé' });
-      c.createEl('p', { text: "Il faut le code de création donné par la personne qui héberge le serveur. Tout ce coffre sera envoyé." });
+      boutonCordee(c, 'Rejoindre avec une invitation', () => { f.creer = false; rafraichir(); }, { cls: 'cordee-bouton-discret' });
+      c.createEl('p', { text: 'Demande le code de création à la personne qui héberge le serveur.' });
       new O.Setting(c).setName('Nom du coffre').addText((t) => t.setValue(f.nom).onChange((v) => { f.nom = v; }));
       new O.Setting(c).setName('Code de création').addText((t) => { t.inputEl.type = 'password'; t.onChange((v) => { f.code = v; }); });
       new O.Setting(c).addButton((b) => b.setButtonText('Créer et partager').setCta().onClick(async () => {
@@ -3423,45 +3456,59 @@ function sectionRepliable(c, titre, cle, hote) {
   d.open = ouverts.has(cle);
   d.createEl('summary', { text: titre });
   d.addEventListener?.('toggle', () => { if (d.open) ouverts.add(cle); else ouverts.delete(cle); });
-  return d.createEl('div');
+  return d.createEl('div', { cls: 'cordee-section-corps' });
 }
 
 function afficherReglagesMoodle(c, p) {
   const zone = c.createEl('div', { cls: 'cordee-moodle' });
-  zone.createEl('p', { text: 'Tes PDF de cours, TD et TP dans le coffre. Le jeton reste sur cet appareil.', cls: 'cordee-details' });
+  zone.createEl('p', { text: 'Récupère tes cours dans le coffre ; ton jeton reste sur cet appareil.', cls: 'cordee-details' });
   const retour = zone.createEl('p', { cls: 'cordee-details', attr: { role: 'status', 'aria-live': 'polite' } });
   let adresse = p.etat.moodle.site, identifiant = '', jeton, motDePasse;
   new O.Setting(zone).setName('Adresse du site Moodle').setDesc('Le site ou sa page de connexion.').addText((t) => t.setPlaceholder('https://moodle.exemple.fr').setValue(adresse).onChange((v) => { adresse = v; }));
-  new O.Setting(zone).setName('Connexion universitaire').setDesc('Recommandé (Lyon 1, connexion de l’université).').addButton((b) => b.setButtonText('Se connecter via le navigateur').setCta().onClick(() => {
-    try { new ConnexionMoodleModal(p.app, p, siteMoodle(adresse)).open(); }
-    catch (e) { retour.setText(e.message); }
-  }));
-  new O.Setting(zone).setName('Identifiant Moodle').setDesc('Facultatif si tu colles un jeton.').addText((t) => t.onChange((v) => { identifiant = v; }));
-  new O.Setting(zone).setName('Mot de passe Moodle').setDesc('Jamais enregistré.').addText((t) => { motDePasse = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; });
-  new O.Setting(zone).setName('Jeton Moodle').setDesc('Préférences → Clés de sécurité → « Moodle mobile web service » (pas la clé RSS).').addText((t) => { jeton = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; t.setPlaceholder(p.etat.moodle.jeton ? 'Jeton enregistré sur cet appareil' : 'Coller un jeton'); });
-  new O.Setting(zone).addButton((b) => b.setButtonText('Tester').onClick(async () => {
+  new O.Setting(zone).setName('Connexion universitaire').addButton((b) => {
+    if (!p.etat.moodle.jeton) b.setCta();
+    b.setButtonText('Se connecter via le navigateur').onClick(() => {
+      try { new ConnexionMoodleModal(p.app, p, siteMoodle(adresse)).open(); }
+      catch (e) { retour.setText(e.message); }
+    });
+  });
+  const connexion = zone.createEl('details', { cls: 'cordee-section' });
+  connexion.createEl('summary', { text: 'Autres méthodes de connexion' });
+  new O.Setting(connexion).setName('Identifiant Moodle').setDesc('Facultatif avec un jeton.').addText((t) => t.onChange((v) => { identifiant = v; }));
+  new O.Setting(connexion).setName('Mot de passe Moodle').setDesc('Jamais enregistré.').addText((t) => { motDePasse = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; });
+  new O.Setting(connexion).setName('Jeton Moodle').setDesc('Clés de sécurité → « Moodle mobile web service », pas la clé RSS.').addText((t) => { jeton = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; t.setPlaceholder(p.etat.moodle.jeton ? 'Jeton enregistré sur cet appareil' : 'Coller un jeton'); });
+  new O.Setting(connexion).addButton((b) => b.setButtonText('Tester').onClick(async () => {
     b.setDisabled(true);
     const secret = motDePasse.inputEl.value || '', cle = jeton.inputEl.value || '';
     motDePasse.setValue(''); jeton.setValue('');
     try { const resultat = await p.connecterMoodle(adresse, cle, identifiant, secret); retour.setText(`Connecté en tant que ${resultat.prenom} · ${resultat.cours.length} cours`); }
     catch (e) { retour.setText(e.message); }
     finally { b.setDisabled(false); }
-  })).addButton((b) => b.setButtonText('Cours Moodle').onClick(() => new CoursMoodleModal(p.app, p).open()))
-    .addButton((b) => b.setButtonText('Mes notes Moodle').onClick(() => new NotesMoodleModal(p.app, p).open()))
-    .addButton((b) => b.setButtonText('Se déconnecter de Moodle').onClick(async () => { await p.deconnecterMoodle(); motDePasse.setValue(''); jeton.setValue(''); retour.setText('Déconnecté de Moodle. Les fichiers déjà récupérés restent dans le coffre.'); }));
+  }));
+  new O.Setting(zone).addButton((b) => {
+    if (p.etat.moodle.jeton) b.setCta();
+    b.setButtonText('Cours Moodle').onClick(() => new CoursMoodleModal(p.app, p).open());
+  }).addButton((b) => b.setButtonText('Mes notes Moodle').onClick(() => new NotesMoodleModal(p.app, p).open()));
+  const compte = zone.createEl('details', { cls: 'cordee-section' });
+  compte.createEl('summary', { text: 'Compte Moodle' });
+  new O.Setting(compte).addButton((b) => b.setButtonText('Se déconnecter de Moodle').onClick(async () => { await p.deconnecterMoodle(); motDePasse.setValue(''); jeton.setValue(''); retour.setText('Déconnecté ; les fichiers récupérés restent dans le coffre.'); }));
 }
 
 let ConnexionMoodleModal;
 if (O) ConnexionMoodleModal = class extends O.Modal {
   constructor(app, plugin, site) { super(app); this.plugin = plugin; this.site = site; }
   onOpen() {
+    preparerPageSecondaire(this);
     const c = this.contentEl, p = this.plugin;
     this.accesInitial = p.etat.moodle;
     c.empty(); c.createEl('h2', { text: 'Connexion Moodle par le navigateur' });
-    c.createEl('p', { text: '1. Ouvre Moodle ci-dessous et connecte-toi avec le bouton de ton université (Lyon 1). Ton mot de passe est saisi uniquement sur son site.' });
+    c.createEl('p', { text: '1. Ouvre Moodle et connecte-toi sur le site de ton université.' });
     c.createEl('a', { text: 'Ouvrir la connexion Moodle', cls: 'external-link', attr: { href: lienConnexionMoodle(this.site), target: '_blank', rel: 'noopener noreferrer' } });
-    c.createEl('p', { text: '2. Après la connexion, Moodle affiche un lien pour lancer l’application. Si le navigateur indique qu’aucune application ne peut l’ouvrir, ferme ce message. Fais un clic droit ou un appui long sur ce lien, puis « Copier l’adresse du lien ».' });
-    c.createEl('p', { text: '3. Reviens ici et colle ce lien. Il donne accès à ton compte : garde-le privé. La clé RSS des préférences ne convient pas.' });
+    c.createEl('p', { text: '2. Copie l’adresse du lien proposé pour lancer l’application (clic droit ou appui long).' });
+    c.createEl('p', { text: '3. Colle ce lien privé ici pour terminer.' });
+    const aide = c.createEl('details', { cls: 'cordee-section' });
+    aide.createEl('summary', { text: 'Le lien ne s’ouvre pas ?' });
+    aide.createEl('p', { text: 'Ferme le message du navigateur, puis copie l’adresse du lien Moodle ; la clé RSS ne convient pas.', cls: 'cordee-details' });
     let champ;
     new O.Setting(c).setName('Lien de retour Moodle').addText((t) => { champ = t; t.inputEl.type = 'password'; t.inputEl.autocomplete = 'off'; t.setPlaceholder('cordee-moodle://token=…'); });
     this.champ = champ;
@@ -3490,6 +3537,7 @@ let CoursMoodleModal;
 if (O) CoursMoodleModal = class extends O.Modal {
   constructor(app, plugin) { super(app); this.plugin = plugin; }
   async onOpen() {
+    preparerPageSecondaire(this);
     const c = this.contentEl, p = this.plugin, m = p.etat.moodle;
     this.objetsImages = [];
     this.modalEl?.addClass('cordee-moodle-modal');
@@ -3498,7 +3546,8 @@ if (O) CoursMoodleModal = class extends O.Modal {
     c.createEl('p', { text: 'Retrouve tes cours et choisis ceux à garder dans ton coffre.', cls: 'cordee-details' });
     const aide = c.createEl('details', { cls: 'cordee-moodle-aide' });
     aide.createEl('summary', { text: 'Récupération et partage' });
-    aide.createEl('p', { text: 'Chaque dossier choisi est partagé avec la cordée, sauf s’il est dans « Dossiers non partagés ». Les fichiers, couvertures et annonces Moodle sont copiés. Tes rendus et tes notes restent sur cet appareil. Récupération automatique toutes les 6 h quand Obsidian est ouvert.', cls: 'cordee-details' });
+    aide.createEl('p', { text: 'Chaque cours sélectionné est partagé avec la cordée, sauf dans « Dossiers non partagés » ; tes rendus et notes restent privés.', cls: 'cordee-details' });
+    aide.createEl('p', { text: 'Les fichiers, couvertures et annonces sont actualisés toutes les 6 h quand Obsidian est ouvert.', cls: 'cordee-details' });
     const retour = c.createEl('p', { text: 'Chargement des cours…', attr: { role: 'status', 'aria-live': 'polite' } });
     try {
       const cours = await p.coursMoodle();
@@ -3530,7 +3579,11 @@ if (O) CoursMoodleModal = class extends O.Modal {
         contenu.createEl('span', { text: nom, cls: 'cordee-moodle-code' });
         contenu.createEl('h3', { text: texteMoodle(coursActuel.fullname || coursActuel.shortname) });
         const description = texteMoodle(coursActuel.summary || '').replace(/\s+/g, ' ').trim();
-        if (description) contenu.createEl('p', { text: description.slice(0, 180) + (description.length > 180 ? '…' : ''), cls: 'cordee-moodle-description' });
+        if (description) {
+          const presentation = contenu.createEl('details', { cls: 'cordee-moodle-presentation' });
+          presentation.createEl('summary', { text: 'Présentation' });
+          presentation.createEl('p', { text: description, cls: 'cordee-moodle-description' });
+        }
         const label = contenu.createEl('label', { cls: 'cordee-moodle-selection' });
         const caseCopier = label.createEl('input', { attr: { type: 'checkbox', 'aria-label': `Copier dans le coffre : ${nom}` } });
         caseCopier.checked = !!choix.copier;
@@ -3564,6 +3617,8 @@ if (O) CoursMoodleModal = class extends O.Modal {
       };
       actualiserCartes();
       const actions = c.createEl('div', { cls: 'cordee-moodle-actions' });
+      // L’action reste visible avant une longue liste de cours, sans recouvrir les cartes.
+      c.insertBefore(actions, grille);
       boutonCordee(actions, 'Récupérer maintenant', async () => {
         if (m !== p.etat.moodle) { retour.setText('Rouvre les cours après ta reconnexion à Moodle.'); return; }
         if ([...destinationsInvalides].some((id) => m.selections[id]?.copier)) { retour.setText('Corrige le dossier de destination avant de récupérer les fichiers.'); return; }
@@ -3601,11 +3656,12 @@ let NotesMoodleModal;
 if (O) NotesMoodleModal = class extends O.Modal {
   constructor(app, plugin) { super(app); this.plugin = plugin; }
   async onOpen() {
+    preparerPageSecondaire(this);
     const c = this.contentEl, p = this.plugin, acces = p.etat.moodle;
     if (p.modalNotesMoodle && p.modalNotesMoodle !== this) p.modalNotesMoodle.onClose();
     p.modalNotesMoodle = this;
     c.empty(); c.createEl('h2', { text: 'Mes notes Moodle' });
-    c.createEl('p', { text: 'Visible seulement sur cet appareil. Tes notes ne sont jamais enregistrées dans le coffre ni partagées avec la cordée.', cls: 'cordee-details' });
+    c.createEl('p', { text: 'Tes notes restent dans cette fenêtre, sans enregistrement ni partage.', cls: 'cordee-details' });
     const retour = c.createEl('p', { text: 'Chargement des notes…', attr: { role: 'status', 'aria-live': 'polite' } });
     try {
       const cours = await p.coursMoodle();
@@ -3613,12 +3669,14 @@ if (O) NotesMoodleModal = class extends O.Modal {
         if (this.ferme || acces !== p.etat.moodle) return;
         const notes = await p.notesMoodle(coursActuel.id, acces);
         if (this.ferme || acces !== p.etat.moodle) return;
-        const bloc = c.createEl('div', { cls: 'cordee-moodle-cours' });
-        bloc.createEl('h3', { text: coursActuel.shortname || coursActuel.fullname });
+        const bloc = c.createEl('details', { cls: 'cordee-moodle-cours cordee-section' });
+        bloc.open = cours.length <= 3 || coursActuel === cours[0];
+        bloc.createEl('summary', { text: coursActuel.shortname || coursActuel.fullname });
         if (!notes.length) bloc.createEl('p', { text: 'Pas encore de note visible dans ce cours.' });
         for (const note of notes) bloc.createEl('p', { text: `${note.titre} · ${note.note}${note.bareme ? ' · ' + note.bareme : ''}` });
       }
       if (!this.ferme && acces === p.etat.moodle) retour.setText(cours.length ? '' : 'Tu n’as aucun cours Moodle pour le moment.');
+      if (!this.ferme && acces === p.etat.moodle) boutonCordee(c, 'Fermer', () => this.close(), { cls: 'cordee-bouton-principal' });
     } catch (e) { if (!this.ferme && acces === p.etat.moodle) retour.setText(e.message); }
   }
   onClose() { this.ferme = true; this.contentEl.empty(); if (this.plugin.modalNotesMoodle === this) this.plugin.modalNotesMoodle = null; }

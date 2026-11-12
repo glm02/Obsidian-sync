@@ -1283,6 +1283,21 @@ test('la semaine : cours avec horaires, devoir « à rendre », liste par jour ;
   assert.ok(rendu.textes.includes('Rien de prévu.'));
 });
 
+test('la semaine : deux créneaux courts successifs ne se recouvrent pas', async () => {
+  const { plugin, rendu, interne, obsidian } = charger({ ...ETAT_TEST });
+  await plugin.onload();
+  const debut = new Date(2026, 10, 12, 9).getTime();
+  plugin.evenementsEntre = async () => [
+    { titre: 'Point rapide', debut, fin: debut + 5 * 60_000, type: 'cordee' },
+    { titre: 'Suite du projet', debut: debut + 10 * 60_000, fin: debut + 20 * 60_000, type: 'cordee' },
+  ];
+  await interne.dessinerSemaine(new obsidian.Modal(plugin.app).contentEl, plugin, interne.debutSemaine(debut), () => {});
+  const cartes = rendu.elements.filter((e) => e.attrs.cls?.split(/\s+/).includes('cordee-evenement'));
+  assert.equal(cartes.length, 2);
+  const basPremiere = parseFloat(cartes[0].style.top) + parseFloat(cartes[0].style.height);
+  assert.ok(basPremiere <= parseFloat(cartes[1].style.top), 'la hauteur minimale ne doit pas masquer le créneau suivant');
+});
+
 test('emploi du temps pour toute la cordée : écrit dans la note commune, lu par chacun ; Moodle refusé', async () => {
   const { plugin, obsidian } = charger({ ...ETAT_TEST, prenom: 'raf' });
   await plugin.onload();
